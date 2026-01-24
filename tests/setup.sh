@@ -33,7 +33,7 @@ echo ""
 SAVE_PATH="$PROJECT_ROOT/saves/${SAVE_NAME}.zip"
 if [ ! -f "$SAVE_PATH" ]; then
     echo "Creating test map..."
-    python3 scripts/create_map.py "$SAVE_NAME" --config configs/test-map-gen.json
+    python3 scripts/create_map.py --name "$SAVE_NAME" --config configs/test-map-gen.json
     echo "  Created: $SAVE_PATH"
 else
     echo "Using existing test map: $SAVE_PATH"
