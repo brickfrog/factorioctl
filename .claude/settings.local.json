@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(git -C /Users/mark/etc/claude/factorioctl log --oneline -10)",
+      "Bash(git -C /Users/mark/etc/claude/factorioctl status)",
+      "Bash(factorio:*)",
+      "Bash(python3:*)",
+      "WebSearch",
+      "WebFetch(domain:forums.factorio.com)",
+      "Bash(python scripts/create_map.py:*)",
+      "Bash(alias:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:lua-api.factorio.com)",
+      "Bash(cargo build:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo test:*)",
+      "Bash(git checkout:*)"
+    ]
+  }
+}

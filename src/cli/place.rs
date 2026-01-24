@@ -14,7 +14,7 @@ pub struct PlaceCommand {
     pub entity_name: String,
 
     /// Position to place at (x,y)
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub at: String,
 
     /// Direction (n, e, s, w, or 0-7)

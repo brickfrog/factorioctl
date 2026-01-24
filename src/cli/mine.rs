@@ -11,7 +11,7 @@ use crate::world::Position;
 #[derive(Args, Debug)]
 pub struct MineCommand {
     /// Mine at specific position
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub at: Option<String>,
 
     /// Mine nearest entity of type

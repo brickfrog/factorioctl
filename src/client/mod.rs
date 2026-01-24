@@ -36,12 +36,26 @@ impl FactorioClient {
 
     /// Execute a raw Lua command
     pub async fn execute_lua(&mut self, lua: &str) -> Result<String> {
-        self.rcon.execute(&format!("/c {}", lua)).await
+        // RCON doesn't handle newlines well, convert to single line
+        let single_line: String = lua
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty() && !line.starts_with("--"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.rcon.execute(&format!("/c {}", single_line)).await
     }
 
     /// Execute a silent Lua command (no console output)
     pub async fn execute_lua_silent(&mut self, lua: &str) -> Result<String> {
-        self.rcon.execute(&format!("/silent-command {}", lua)).await
+        // RCON doesn't handle newlines well, convert to single line
+        let single_line: String = lua
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty() && !line.starts_with("--"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.rcon.execute(&format!("/silent-command {}", single_line)).await
     }
 
     // --- Game State Queries ---

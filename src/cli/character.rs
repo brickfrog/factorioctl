@@ -22,13 +22,14 @@ pub enum CharacterSubcommand {
     /// Teleport character to position
     Teleport {
         /// Target position (x,y)
+        #[arg(allow_hyphen_values = true)]
         position: String,
     },
 
     /// Walk character to position (pathfinding)
     Walk {
         /// Target position
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         to: String,
     },
 

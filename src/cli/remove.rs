@@ -10,7 +10,7 @@ use crate::world::Position;
 #[derive(Args, Debug)]
 pub struct RemoveCommand {
     /// Remove entity at position
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub at: Option<String>,
 
     /// Remove entity by unit number

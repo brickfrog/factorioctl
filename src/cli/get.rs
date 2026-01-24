@@ -25,7 +25,7 @@ pub enum GetSubcommand {
     /// Query entities in an area
     Entities {
         /// Area to search (x1,y1,x2,y2)
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         area: String,
 
         /// Filter by entity type
@@ -46,7 +46,7 @@ pub enum GetSubcommand {
     /// Query resources in an area
     Resources {
         /// Area to search (x1,y1,x2,y2)
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         area: Option<String>,
 
         /// Filter by resource type
@@ -58,20 +58,21 @@ pub enum GetSubcommand {
         nearest: Option<String>,
 
         /// Origin position for nearest search (x,y)
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         from: Option<String>,
     },
 
     /// Query tiles in an area
     Tiles {
         /// Area to search (x1,y1,x2,y2)
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         area: String,
     },
 
     /// Get a specific tile
     Tile {
         /// Position (x,y)
+        #[arg(allow_hyphen_values = true)]
         position: String,
     },
 }
