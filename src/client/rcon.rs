@@ -153,7 +153,9 @@ impl RconClient {
             .context("Failed to read size")?;
 
         let size = i32::from_le_bytes(size_buf) as usize;
-        if size > 4096 {
+        // Factorio can return large responses (especially for entity queries)
+        // The Source RCON protocol max is 4096, but Factorio extends this
+        if size > 1_000_000 {
             bail!("Packet too large: {} bytes", size);
         }
 

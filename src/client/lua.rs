@@ -21,7 +21,7 @@ for _, surface in pairs(game.surfaces) do
         darkness = surface.darkness
     })
 end
-rcon.print(game.table_to_json(result))
+rcon.print(helpers.table_to_json(result))
 "#
         .trim()
         .to_string()
@@ -30,7 +30,7 @@ rcon.print(game.table_to_json(result))
     /// Find entities in an area
     pub fn find_entities(area: Area, entity_type: Option<&str>, name: Option<&str>) -> String {
         let mut filters = vec![format!(
-            "area={{{{ {{{},{}}}, {{{},{} }} }}}}",
+            "area={{{{{},{}}},{{{},{}}}}}",
             area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y
         )];
 
@@ -44,7 +44,7 @@ rcon.print(game.table_to_json(result))
         format!(
             r#"
 local result = {{}}
-local entities = game.surfaces[1].find_entities_filtered{{ {} }}
+local entities = game.surfaces[1].find_entities_filtered{{{}}}
 for _, e in pairs(entities) do
     table.insert(result, {{
         unit_number = e.unit_number,
@@ -56,7 +56,7 @@ for _, e in pairs(entities) do
         force = e.force.name
     }})
 end
-rcon.print(game.table_to_json(result))
+rcon.print(helpers.table_to_json(result))
 "#,
             filters.join(", ")
         )
@@ -70,7 +70,7 @@ rcon.print(game.table_to_json(result))
             r#"
 local e = game.get_entity_by_unit_number({})
 if e then
-    rcon.print(game.table_to_json({{
+    rcon.print(helpers.table_to_json({{
         unit_number = e.unit_number,
         name = e.name,
         type = e.type,
@@ -100,7 +100,7 @@ end
 local patches = {{}}
 local resources = game.surfaces[1].find_entities_filtered{{
     type="resource",
-    area={{{{ {},{} }}, {{ {},{} }}}}{}
+    area={{{{{},{}}},{{{},{}}}}}{}
 }}
 
 -- Group by resource name and aggregate
@@ -144,7 +144,7 @@ for _, patch in pairs(by_name) do
         }}
     }})
 end
-rcon.print(game.table_to_json(result))
+rcon.print(helpers.table_to_json(result))
 "#,
             area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y, name_filter
         )
@@ -196,7 +196,7 @@ if nearest then
         max_y = math.max(max_y, r.position.y)
     end
 
-    rcon.print(game.table_to_json({{
+    rcon.print(helpers.table_to_json({{
         name = nearest.name,
         total_amount = total,
         tile_count = #patch_resources,
@@ -234,7 +234,7 @@ for x = {}, {} do
         }})
     end
 end
-rcon.print(game.table_to_json(result))
+rcon.print(helpers.table_to_json(result))
 "#,
             area.left_top.x as i32,
             area.right_bottom.x as i32,
@@ -250,7 +250,7 @@ rcon.print(game.table_to_json(result))
         format!(
             r#"
 local tile = game.surfaces[1].get_tile({}, {})
-rcon.print(game.table_to_json({{
+rcon.print(helpers.table_to_json({{
     name = tile.name,
     position = {{ x = {}, y = {} }},
     collides_with_player = tile.collides_with("player-layer")
@@ -265,10 +265,10 @@ rcon.print(game.table_to_json({{
     /// Initialize character entity
     pub fn init_character() -> String {
         r#"
--- Check if character already exists
+if not global then global = {} end
 if global.factorioctl_character and global.factorioctl_character.valid then
     local c = global.factorioctl_character
-    rcon.print(game.table_to_json({
+    rcon.print(helpers.table_to_json({
         unit_number = c.unit_number,
         name = c.name,
         type = c.type,
@@ -286,7 +286,7 @@ else
     }
     if c then
         global.factorioctl_character = c
-        rcon.print(game.table_to_json({
+        rcon.print(helpers.table_to_json({
             unit_number = c.unit_number,
             name = c.name,
             type = c.type,
@@ -308,7 +308,7 @@ end
     pub fn teleport_character(position: Position) -> String {
         format!(
             r#"
-local c = global.factorioctl_character
+if not global then global = {{}} end local c = global.factorioctl_character
 if c and c.valid then
     c.teleport({{ {}, {} }})
     rcon.print("ok")
@@ -326,7 +326,7 @@ end
     pub fn walk_character(position: Position) -> String {
         format!(
             r#"
-local c = global.factorioctl_character
+if not global then global = {{}} end local c = global.factorioctl_character
 if c and c.valid then
     -- Calculate direction to target
     local dx = {} - c.position.x
@@ -352,9 +352,9 @@ end
     /// Get character status
     pub fn character_status() -> String {
         r#"
-local c = global.factorioctl_character
+if not global then global = {} end local c = global.factorioctl_character
 if c and c.valid then
-    rcon.print(game.table_to_json({
+    rcon.print(helpers.table_to_json({
         valid = true,
         unit_number = c.unit_number,
         position = { x = c.position.x, y = c.position.y },
@@ -373,19 +373,22 @@ end
     /// Get character inventory
     pub fn character_inventory() -> String {
         r#"
-local c = global.factorioctl_character
+if not global then global = {} end local c = global.factorioctl_character
 if c and c.valid then
     local inv = c.get_main_inventory()
     local items = {}
+    local free_slots = 0
     if inv then
-        for name, count in pairs(inv.get_contents()) do
-            table.insert(items, { name = name, count = count })
+        for _, item in pairs(inv.get_contents()) do
+            table.insert(items, { name = item.name, count = item.count })
         end
+        free_slots = inv.count_empty_stacks() or 0
     end
-    rcon.print(game.table_to_json({
-        items = items,
-        free_slots = inv and (inv.count_empty_stacks() or 0) or 0
-    }))
+    if #items == 0 then
+        rcon.print('{"items": [], "free_slots": ' .. tostring(free_slots) .. '}')
+    else
+        rcon.print(helpers.table_to_json({ items = items, free_slots = free_slots }))
+    end
 else
     rcon.print('{"items": [], "free_slots": 0}')
 end
@@ -398,7 +401,7 @@ end
     pub fn mine_at(position: Position, count: u32) -> String {
         format!(
             r#"
-local c = global.factorioctl_character
+if not global then global = {{}} end local c = global.factorioctl_character
 if not (c and c.valid) then
     rcon.print('{{"success": false, "error": "No character"}}')
     return
@@ -435,12 +438,12 @@ end
 local inv = c.get_main_inventory()
 local items = {{}}
 if inv then
-    for name, count in pairs(inv.get_contents()) do
-        table.insert(items, {{ name = name, count = count }})
+    for _, item in pairs(inv.get_contents()) do
+        table.insert(items, {{ name = item.name, count = item.count }})
     end
 end
 
-rcon.print(game.table_to_json({{
+rcon.print(helpers.table_to_json({{
     success = mined > 0,
     mined_count = mined,
     inventory = items
@@ -456,7 +459,7 @@ rcon.print(game.table_to_json({{
     pub fn mine_nearest(entity_type: &str, count: u32) -> String {
         format!(
             r#"
-local c = global.factorioctl_character
+if not global then global = {{}} end local c = global.factorioctl_character
 if not (c and c.valid) then
     rcon.print('{{"success": false, "error": "No character"}}')
     return
@@ -500,12 +503,12 @@ end
 local inv = c.get_main_inventory()
 local items = {{}}
 if inv then
-    for name, count in pairs(inv.get_contents()) do
-        table.insert(items, {{ name = name, count = count }})
+    for _, item in pairs(inv.get_contents()) do
+        table.insert(items, {{ name = item.name, count = item.count }})
     end
 end
 
-rcon.print(game.table_to_json({{
+rcon.print(helpers.table_to_json({{
     success = mined > 0,
     mined_count = mined,
     inventory = items
@@ -521,14 +524,14 @@ rcon.print(game.table_to_json({{
     pub fn craft(recipe: &str, count: u32) -> String {
         format!(
             r#"
-local c = global.factorioctl_character
+if not global then global = {{}} end local c = global.factorioctl_character
 if not (c and c.valid) then
     rcon.print('{{"success": false, "error": "No character"}}')
     return
 end
 
 local crafted = c.begin_crafting{{ recipe = "{}", count = {} }}
-rcon.print(game.table_to_json({{
+rcon.print(helpers.table_to_json({{
     success = crafted > 0,
     queued = crafted,
     queue_size = c.crafting_queue_size
@@ -543,7 +546,7 @@ rcon.print(game.table_to_json({{
     /// Wait for crafting to complete (poll-based, handled in client)
     pub fn wait_for_crafting() -> String {
         r#"
-local c = global.factorioctl_character
+if not global then global = {} end local c = global.factorioctl_character
 if c and c.valid then
     rcon.print(tostring(c.crafting_queue_size))
 else
@@ -558,7 +561,7 @@ end
     pub fn place_entity(entity_name: &str, position: Position, direction: Direction) -> String {
         format!(
             r#"
-local c = global.factorioctl_character
+if not global then global = {{}} end local c = global.factorioctl_character
 if not (c and c.valid) then
     rcon.print('{{"error": "No character"}}')
     return
@@ -593,7 +596,7 @@ local e = game.surfaces[1].create_entity{{
 
 if e then
     inv.remove{{ name = "{}", count = 1 }}
-    rcon.print(game.table_to_json({{
+    rcon.print(helpers.table_to_json({{
         unit_number = e.unit_number,
         name = e.name,
         type = e.type,
@@ -690,7 +693,7 @@ if not inv then
 end
 
 local inserted = inv.insert{{ name = "{}", count = {} }}
-rcon.print(game.table_to_json({{ inserted = inserted }}))
+rcon.print(helpers.table_to_json({{ inserted = inserted }}))
 "#,
             unit_number, inv_define, item, count
         )
@@ -714,7 +717,7 @@ if not e.set_recipe then
 end
 
 local result = e.set_recipe("{}")
-rcon.print(game.table_to_json({{ success = result ~= nil }}))
+rcon.print(helpers.table_to_json({{ success = result ~= nil }}))
 "#,
             unit_number, recipe
         )
