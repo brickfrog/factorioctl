@@ -1,6 +1,9 @@
 # Save files (generated during testing)
 saves/
 
+# Rust
+target/
+
 # Python
 __pycache__/
 *.pyc
