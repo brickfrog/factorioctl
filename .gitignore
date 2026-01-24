@@ -16,3 +16,4 @@ venv/
 
 # Factorio logs
 factorio-current.log
+logs/
