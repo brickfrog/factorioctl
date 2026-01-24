@@ -20,6 +20,9 @@ RCON_PORT=27016
 RCON_PASSWORD="test_password"
 GAME_PORT=34197
 
+# Use separate data directory so headless server doesn't conflict with Steam client
+SERVER_DATA_DIR="$PROJECT_ROOT/.factorio-server"
+
 echo "=== factorioctl Test Setup ==="
 echo ""
 
@@ -65,13 +68,17 @@ echo "Starting headless server..."
 echo "  RCON port: $RCON_PORT"
 echo "  RCON password: $RCON_PASSWORD"
 echo "  Game port: $GAME_PORT (for spectating)"
+echo "  Data dir: $SERVER_DATA_DIR"
 echo ""
 
-# Create logs directory
+# Create directories
 mkdir -p "$PROJECT_ROOT/logs"
+mkdir -p "$SERVER_DATA_DIR"
 LOG_FILE="$PROJECT_ROOT/logs/server.log"
 
+# Use --config to specify separate data directory (avoids lock conflict with Steam client)
 "$FACTORIO_BIN" \
+    --config "$SERVER_DATA_DIR/config.ini" \
     --start-server "$SAVE_PATH" \
     --rcon-port "$RCON_PORT" \
     --rcon-password "$RCON_PASSWORD" \
