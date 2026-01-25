@@ -4,6 +4,58 @@ use serde::{Deserialize, Serialize};
 
 use super::{Direction, Position};
 
+// ============================================================================
+// Native Factorio Blueprint Types
+// ============================================================================
+
+/// Info about a stored blueprint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredBlueprint {
+    pub name: String,
+    pub entity_count: u32,
+}
+
+/// Result of exporting to native blueprint string
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeBlueprintExport {
+    pub blueprint_string: String,
+    pub entity_count: u32,
+}
+
+/// Result of placing a blueprint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueprintPlaceResult {
+    pub success: bool,
+    pub ghosts_created: u32,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Result of saving a blueprint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueprintSaveResult {
+    pub success: bool,
+    #[serde(default)]
+    pub entity_count: u32,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A retrieved blueprint string
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueprintGetResult {
+    #[serde(default)]
+    pub blueprint_string: Option<String>,
+    #[serde(default)]
+    pub entity_count: u32,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+// ============================================================================
+// Custom JSON Blueprint Types (existing)
+// ============================================================================
+
 /// A blueprint describing desired entity placement
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Blueprint {

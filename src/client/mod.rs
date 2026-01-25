@@ -7,8 +7,9 @@ pub mod server;
 use anyhow::Result;
 
 use crate::world::{
-    Area, BuildResult, CharacterStatus, CraftResult, Direction, Entity, GatherResult, Inventory,
-    MineResult, PlacementSpec, Position, ResourcePatch, Surface, Tick, Tile, WalkResult,
+    Area, BuildResult, CharacterStatus, CollisionMap, CraftResult, Direction, Entity,
+    GatherResult, GridPos, Inventory, MineResult, PlacementSpec, Position, Prototype, Recipe,
+    RecipeSummary, ResourcePatch, Surface, Tick, Tile, WalkResult,
 };
 use lua::LuaCommand;
 use rcon::RconClient;
@@ -148,6 +149,171 @@ impl FactorioClient {
         let response = self.execute_lua(&lua).await?;
         let tile: Tile = serde_json::from_str(&response)?;
         Ok(tile)
+    }
+
+    // --- Pathfinding Support ---
+
+    /// Build a collision map for pathfinding in an area
+    pub async fn build_collision_map(&mut self, area: Area) -> Result<CollisionMap> {
+        let mut collision_map = CollisionMap::new(area);
+
+        // Query tiles for terrain obstacles (water, cliffs)
+        let tiles = self.get_tiles(area).await?;
+        for tile in tiles {
+            if tile.collides_with_player {
+                let grid_pos = GridPos::from_position(&tile.position);
+                collision_map.block(grid_pos);
+            }
+        }
+
+        // Query entities for structure obstacles
+        let entities = self.find_entities(area, None, None).await?;
+        for entity in entities {
+            // Skip resources (can build on top of ore)
+            if entity.entity_type.as_deref() == Some("resource") {
+                continue;
+            }
+            // Skip character
+            if entity.name == "character" {
+                continue;
+            }
+            // Skip items on ground
+            if entity.entity_type.as_deref() == Some("item-entity") {
+                continue;
+            }
+
+            // Add entity footprint as blocked
+            let padding = entity_collision_padding(&entity.name);
+            let center = GridPos::from_position(&entity.position);
+            for dx in -padding..=padding {
+                for dy in -padding..=padding {
+                    collision_map.block(GridPos::new(center.x + dx, center.y + dy));
+                }
+            }
+        }
+
+        Ok(collision_map)
+    }
+
+    // --- Prototype Queries ---
+
+    /// Get a recipe by name
+    pub async fn get_recipe(&mut self, name: &str) -> Result<Recipe> {
+        let lua = LuaCommand::get_recipe(name);
+        let response = self.execute_lua(&lua).await?;
+        let recipe: Recipe = serde_json::from_str(&response)?;
+        Ok(recipe)
+    }
+
+    /// Get all recipes in a category
+    pub async fn get_recipes_by_category(&mut self, category: &str) -> Result<Vec<RecipeSummary>> {
+        let lua = LuaCommand::get_recipes_by_category(category);
+        let response = self.execute_lua(&lua).await?;
+        let recipes: Vec<RecipeSummary> = serde_json::from_str(&response)?;
+        Ok(recipes)
+    }
+
+    /// Get all recipes that produce a specific item
+    pub async fn get_recipes_for_item(&mut self, item: &str) -> Result<Vec<Recipe>> {
+        let lua = LuaCommand::get_recipes_for_item(item);
+        let response = self.execute_lua(&lua).await?;
+        let recipes: Vec<Recipe> = serde_json::from_str(&response)?;
+        Ok(recipes)
+    }
+
+    /// Get an entity prototype by name
+    pub async fn get_prototype(&mut self, name: &str) -> Result<Prototype> {
+        let lua = LuaCommand::get_prototype(name);
+        let response = self.execute_lua(&lua).await?;
+        let prototype: Prototype = serde_json::from_str(&response)?;
+        Ok(prototype)
+    }
+
+    // --- Native Blueprint Operations ---
+
+    /// Create a native Factorio blueprint string from entities in an area
+    pub async fn create_native_blueprint(
+        &mut self,
+        area: Area,
+    ) -> Result<crate::world::NativeBlueprintExport> {
+        let lua = LuaCommand::create_native_blueprint(area);
+        let response = self.execute_lua(&lua).await?;
+        if response.contains("\"error\"") {
+            #[derive(serde::Deserialize)]
+            struct ErrorResponse {
+                error: String,
+            }
+            let err: ErrorResponse = serde_json::from_str(&response)?;
+            anyhow::bail!("{}", err.error);
+        }
+        let result: crate::world::NativeBlueprintExport = serde_json::from_str(&response)?;
+        Ok(result)
+    }
+
+    /// Save a blueprint to storage with a name
+    pub async fn save_blueprint(
+        &mut self,
+        name: &str,
+        area: Area,
+    ) -> Result<crate::world::BlueprintSaveResult> {
+        let lua = LuaCommand::save_blueprint(name, area);
+        let response = self.execute_lua(&lua).await?;
+        let result: crate::world::BlueprintSaveResult = serde_json::from_str(&response)?;
+        Ok(result)
+    }
+
+    /// List all saved blueprints
+    pub async fn list_blueprints(&mut self) -> Result<Vec<crate::world::StoredBlueprint>> {
+        let lua = LuaCommand::list_blueprints();
+        let response = self.execute_lua(&lua).await?;
+        let result: Vec<crate::world::StoredBlueprint> = serde_json::from_str(&response)?;
+        Ok(result)
+    }
+
+    /// Get a saved blueprint string by name
+    pub async fn get_blueprint(&mut self, name: &str) -> Result<crate::world::BlueprintGetResult> {
+        let lua = LuaCommand::get_blueprint(name);
+        let response = self.execute_lua(&lua).await?;
+        let result: crate::world::BlueprintGetResult = serde_json::from_str(&response)?;
+        Ok(result)
+    }
+
+    /// Place a saved blueprint at a position
+    pub async fn place_blueprint(
+        &mut self,
+        name: &str,
+        position: Position,
+        direction: u8,
+    ) -> Result<crate::world::BlueprintPlaceResult> {
+        let lua = LuaCommand::place_blueprint(name, position, direction);
+        let response = self.execute_lua(&lua).await?;
+        let result: crate::world::BlueprintPlaceResult = serde_json::from_str(&response)?;
+        Ok(result)
+    }
+
+    /// Import and place a blueprint from a string
+    pub async fn import_blueprint(
+        &mut self,
+        bp_string: &str,
+        position: Position,
+        direction: u8,
+    ) -> Result<crate::world::BlueprintPlaceResult> {
+        let lua = LuaCommand::import_blueprint(bp_string, position, direction);
+        let response = self.execute_lua(&lua).await?;
+        let result: crate::world::BlueprintPlaceResult = serde_json::from_str(&response)?;
+        Ok(result)
+    }
+
+    /// Delete a saved blueprint
+    pub async fn delete_blueprint(&mut self, name: &str) -> Result<bool> {
+        let lua = LuaCommand::delete_blueprint(name);
+        let response = self.execute_lua(&lua).await?;
+        #[derive(serde::Deserialize)]
+        struct DeleteResult {
+            success: bool,
+        }
+        let result: DeleteResult = serde_json::from_str(&response)?;
+        Ok(result.success)
     }
 
     // --- Character Control ---
@@ -1028,5 +1194,37 @@ rcon.print(helpers.table_to_json({{
             entities,
             errors,
         })
+    }
+}
+
+/// Get collision padding for entity types based on their size
+/// Returns the half-size rounded down (0 for 1x1, 1 for 2x2 or 3x3)
+fn entity_collision_padding(entity_name: &str) -> i32 {
+    match entity_name {
+        // 2x2 entities
+        "burner-mining-drill" | "electric-mining-drill" => 1,
+        "stone-furnace" | "steel-furnace" | "electric-furnace" => 1,
+        "boiler" | "steam-engine" => 1,
+        "offshore-pump" => 1,
+        "radar" => 1,
+        "lab" => 1,
+
+        // 3x3 entities
+        name if name.starts_with("assembling-machine") => 1,
+        "chemical-plant" => 1,
+        "oil-refinery" => 2,
+        "centrifuge" => 1,
+        "pumpjack" => 1,
+
+        // 1x1 entities (belts, inserters, chests, poles)
+        _ if entity_name.contains("belt") => 0,
+        _ if entity_name.contains("inserter") => 0,
+        _ if entity_name.contains("chest") => 0,
+        _ if entity_name.contains("pole") => 0,
+        _ if entity_name.contains("splitter") => 0, // 2x1 but we'll be conservative
+        _ if entity_name.contains("pipe") => 0,
+
+        // Default to 0 (1x1)
+        _ => 0,
     }
 }

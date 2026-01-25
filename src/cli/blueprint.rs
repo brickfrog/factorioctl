@@ -10,7 +10,7 @@ use crate::client::FactorioClient;
 use crate::output::{Output, OutputFormat, Outputable};
 use crate::world::{
     ApplyResult, Area, Blueprint, BlueprintDiff, BlueprintEntity, DiffAdd, DiffRemove, DiffRotate,
-    Position,
+    Direction, Position,
 };
 
 /// Blueprint commands for declarative placement
@@ -54,7 +54,7 @@ pub enum BlueprintSubcommand {
         origin_y: Option<f64>,
     },
 
-    /// Export current entities as a blueprint
+    /// Export current entities as a blueprint (JSON format)
     Export {
         /// Area to export (x1,y1,x2,y2)
         #[arg(long, allow_hyphen_values = true)]
@@ -66,6 +66,68 @@ pub enum BlueprintSubcommand {
 
         /// Blueprint name
         #[arg(long, default_value = "exported")]
+        name: String,
+    },
+
+    // --- Native Factorio Blueprint Commands ---
+
+    /// Export area to native Factorio blueprint string
+    String {
+        /// Area to export (x1,y1,x2,y2)
+        #[arg(long, allow_hyphen_values = true)]
+        area: String,
+    },
+
+    /// Save a blueprint with a name (stored in game save)
+    Save {
+        /// Blueprint name
+        name: String,
+
+        /// Area to save (x1,y1,x2,y2)
+        #[arg(long, allow_hyphen_values = true)]
+        area: String,
+    },
+
+    /// List saved blueprints
+    List,
+
+    /// Get a saved blueprint string by name
+    Get {
+        /// Blueprint name
+        name: String,
+    },
+
+    /// Place a saved blueprint at a position
+    Place {
+        /// Blueprint name
+        name: String,
+
+        /// Position to place at (x,y)
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+
+        /// Direction to rotate (north, east, south, west)
+        #[arg(long, default_value = "north")]
+        direction: String,
+    },
+
+    /// Import and place from a blueprint string
+    Import {
+        /// Blueprint string
+        string: String,
+
+        /// Position to place at (x,y)
+        #[arg(long, allow_hyphen_values = true)]
+        at: String,
+
+        /// Direction to rotate (north, east, south, west)
+        #[arg(long, default_value = "north")]
+        direction: String,
+    },
+
+    /// Delete a saved blueprint
+    Delete {
+        /// Blueprint name
         name: String,
     },
 }
@@ -133,6 +195,70 @@ pub async fn execute(cmd: BlueprintCommand, conn: &ResolvedConnectionArgs) -> Re
 
             let blueprint = export_blueprint(&mut client, &area, &origin_pos, &name).await?;
             println!("{}", serde_json::to_string_pretty(&blueprint)?);
+        }
+
+        // --- Native Factorio Blueprint Commands ---
+
+        BlueprintSubcommand::String { area } => {
+            let area = parse_area(&area)?;
+            let result = client.create_native_blueprint(area).await?;
+            Output::new(conn.output).print(&result)?;
+        }
+
+        BlueprintSubcommand::Save { name, area } => {
+            let area = parse_area(&area)?;
+            let result = client.save_blueprint(&name, area).await?;
+            Output::new(conn.output).print(&result)?;
+        }
+
+        BlueprintSubcommand::List => {
+            let blueprints = client.list_blueprints().await?;
+            Output::new(conn.output).print(&blueprints)?;
+        }
+
+        BlueprintSubcommand::Get { name } => {
+            let result = client.get_blueprint(&name).await?;
+            if let Some(error) = &result.error {
+                anyhow::bail!("{}", error);
+            }
+            if let Some(bp_string) = &result.blueprint_string {
+                if conn.output == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    println!("{}", bp_string);
+                }
+            }
+        }
+
+        BlueprintSubcommand::Place { name, at, direction } => {
+            let position = parse_position(&at)?;
+            let dir = Direction::from_name(&direction).unwrap_or(Direction::North);
+            let result = client
+                .place_blueprint(&name, position, dir.to_factorio())
+                .await?;
+            Output::new(conn.output).print(&result)?;
+        }
+
+        BlueprintSubcommand::Import {
+            string,
+            at,
+            direction,
+        } => {
+            let position = parse_position(&at)?;
+            let dir = Direction::from_name(&direction).unwrap_or(Direction::North);
+            let result = client
+                .import_blueprint(&string, position, dir.to_factorio())
+                .await?;
+            Output::new(conn.output).print(&result)?;
+        }
+
+        BlueprintSubcommand::Delete { name } => {
+            let success = client.delete_blueprint(&name).await?;
+            if success {
+                println!("Deleted blueprint '{}'", name);
+            } else {
+                anyhow::bail!("Blueprint '{}' not found", name);
+            }
         }
     }
 

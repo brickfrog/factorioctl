@@ -42,5 +42,6 @@ async fn main() -> Result<()> {
         Commands::Tick(cmd) => cli::tick::execute(cmd, &conn).await,
         Commands::Exec(cmd) => cli::exec::execute(cmd, &conn).await,
         Commands::Map(cmd) => cli::map::execute(cmd, &conn).await,
+        Commands::Route(cmd) => cli::route::execute(cmd, &conn).await,
     }
 }

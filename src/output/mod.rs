@@ -292,3 +292,150 @@ impl Outputable for crate::world::BuildResult {
         lines.join("\n")
     }
 }
+
+impl Outputable for crate::world::Recipe {
+    fn format_human(&self) -> String {
+        let mut lines = vec![
+            format!("Recipe: {}", self.name),
+            format!("  Category: {}", self.category),
+            format!("  Crafting time: {:.1}s", self.energy),
+        ];
+        if !self.ingredients.is_empty() {
+            lines.push("  Ingredients:".to_string());
+            for ing in &self.ingredients {
+                lines.push(format!("    - {} x{}", ing.name, ing.amount));
+            }
+        }
+        if !self.products.is_empty() {
+            lines.push("  Products:".to_string());
+            for prod in &self.products {
+                let prob = prod
+                    .probability
+                    .map(|p| format!(" ({:.0}%)", p * 100.0))
+                    .unwrap_or_default();
+                lines.push(format!("    - {} x{}{}", prod.name, prod.amount, prob));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for Vec<crate::world::Recipe> {
+    fn format_human(&self) -> String {
+        if self.is_empty() {
+            return "No recipes found".to_string();
+        }
+        let mut lines = vec![format!("Found {} recipes:", self.len())];
+        for recipe in self {
+            lines.push(format!(
+                "  {} ({}, {:.1}s)",
+                recipe.name, recipe.category, recipe.energy
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for Vec<crate::world::RecipeSummary> {
+    fn format_human(&self) -> String {
+        if self.is_empty() {
+            return "No recipes found".to_string();
+        }
+        let mut lines = vec![format!("Found {} recipes:", self.len())];
+        for recipe in self {
+            lines.push(format!(
+                "  {} ({}, {:.1}s)",
+                recipe.name, recipe.category, recipe.energy
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for crate::world::Prototype {
+    fn format_human(&self) -> String {
+        let mut lines = vec![
+            format!("Entity: {}", self.name),
+            format!("  Type: {}", self.entity_type),
+        ];
+        if let Some(size) = &self.size {
+            lines.push(format!("  Size: {:.0}x{:.0}", size[0], size[1]));
+        }
+        if let Some(speed) = self.crafting_speed {
+            lines.push(format!("  Crafting speed: {:.1}", speed));
+        }
+        if let Some(cats) = &self.crafting_categories {
+            lines.push(format!("  Crafting categories: [{}]", cats.join(", ")));
+        }
+        if let Some(speed) = self.mining_speed {
+            lines.push(format!("  Mining speed: {:.2}", speed));
+        }
+        if let Some(cats) = &self.resource_categories {
+            lines.push(format!("  Resource categories: [{}]", cats.join(", ")));
+        }
+        if let Some(speed) = self.belt_speed {
+            lines.push(format!("  Belt speed: {:.2} items/tick", speed));
+        }
+        if let Some(source) = &self.energy_source {
+            lines.push(format!("  Energy source: {}", source));
+        }
+        if let Some(usage) = self.energy_usage {
+            lines.push(format!("  Energy usage: {:.0}W", usage));
+        }
+        lines.join("\n")
+    }
+}
+
+// --- Native Blueprint Types ---
+
+impl Outputable for crate::world::NativeBlueprintExport {
+    fn format_human(&self) -> String {
+        format!(
+            "Blueprint ({} entities):\n{}",
+            self.entity_count, self.blueprint_string
+        )
+    }
+}
+
+impl Outputable for crate::world::BlueprintSaveResult {
+    fn format_human(&self) -> String {
+        if self.success {
+            format!("Saved blueprint ({} entities)", self.entity_count)
+        } else {
+            format!(
+                "Failed to save: {}",
+                self.error.as_deref().unwrap_or("unknown error")
+            )
+        }
+    }
+}
+
+impl Outputable for Vec<crate::world::StoredBlueprint> {
+    fn format_human(&self) -> String {
+        if self.is_empty() {
+            return "No saved blueprints".to_string();
+        }
+        let mut lines = vec![format!("Saved blueprints ({}):", self.len())];
+        for bp in self {
+            lines.push(format!("  {} ({} entities)", bp.name, bp.entity_count));
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for crate::world::BlueprintPlaceResult {
+    fn format_human(&self) -> String {
+        if self.success {
+            if self.ghosts_created > 0 {
+                format!("Placed blueprint ({} ghost entities)", self.ghosts_created)
+            } else {
+                "Placed blueprint".to_string()
+            }
+        } else {
+            format!(
+                "Failed to place: {}",
+                self.error.as_deref().unwrap_or("unknown error")
+            )
+        }
+    }
+}

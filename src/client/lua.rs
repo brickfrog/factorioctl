@@ -293,7 +293,7 @@ for x = {}, {} do
         table.insert(result, {{
             name = tile.name,
             position = {{ x = x, y = y }},
-            collides_with_player = tile.collides_with("player-layer")
+            collides_with_player = tile.collides_with("player")
         }})
     end
 end
@@ -316,7 +316,7 @@ local tile = game.surfaces[1].get_tile({}, {})
 rcon.print(helpers.table_to_json({{
     name = tile.name,
     position = {{ x = {}, y = {} }},
-    collides_with_player = tile.collides_with("player-layer")
+    collides_with_player = tile.collides_with("player")
 }}))
 "#,
             position.x as i32, position.y as i32, position.x as i32, position.y as i32
@@ -1029,6 +1029,467 @@ local result = e.set_recipe("{}")
 rcon.print(helpers.table_to_json({{ success = result ~= nil }}))
 "#,
             unit_number, recipe
+        )
+        .trim()
+        .to_string()
+    }
+
+    // --- Prototype Queries ---
+
+    /// Get a recipe by name
+    pub fn get_recipe(name: &str) -> String {
+        format!(
+            r#"
+local recipe = prototypes.recipe["{}"]
+if recipe then
+    local ingredients = {{}}
+    for _, ing in pairs(recipe.ingredients) do
+        table.insert(ingredients, {{
+            type = ing.type,
+            name = ing.name,
+            amount = ing.amount
+        }})
+    end
+    local products = {{}}
+    for _, prod in pairs(recipe.products) do
+        table.insert(products, {{
+            type = prod.type,
+            name = prod.name,
+            amount = prod.amount,
+            probability = prod.probability
+        }})
+    end
+    rcon.print(helpers.table_to_json({{
+        name = recipe.name,
+        category = recipe.category,
+        energy = recipe.energy,
+        ingredients = ingredients,
+        products = products
+    }}))
+else
+    rcon.print('{{"error": "Recipe not found"}}')
+end
+"#,
+            name
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Get all recipes in a category
+    pub fn get_recipes_by_category(category: &str) -> String {
+        format!(
+            r#"
+local recipes = {{}}
+for name, recipe in pairs(prototypes.recipe) do
+    if recipe.category == "{}" then
+        table.insert(recipes, {{
+            name = recipe.name,
+            category = recipe.category,
+            energy = recipe.energy
+        }})
+    end
+end
+rcon.print(helpers.table_to_json(recipes))
+"#,
+            category
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Get all recipes that produce a specific item
+    pub fn get_recipes_for_item(item: &str) -> String {
+        format!(
+            r#"
+local recipes = {{}}
+for name, recipe in pairs(prototypes.recipe) do
+    for _, product in pairs(recipe.products) do
+        if product.name == "{}" then
+            local ingredients = {{}}
+            for _, ing in pairs(recipe.ingredients) do
+                table.insert(ingredients, {{
+                    type = ing.type,
+                    name = ing.name,
+                    amount = ing.amount
+                }})
+            end
+            local products = {{}}
+            for _, prod in pairs(recipe.products) do
+                table.insert(products, {{
+                    type = prod.type,
+                    name = prod.name,
+                    amount = prod.amount,
+                    probability = prod.probability
+                }})
+            end
+            table.insert(recipes, {{
+                name = recipe.name,
+                category = recipe.category,
+                energy = recipe.energy,
+                ingredients = ingredients,
+                products = products
+            }})
+            break
+        end
+    end
+end
+rcon.print(helpers.table_to_json(recipes))
+"#,
+            item
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Get an entity prototype by name
+    pub fn get_prototype(name: &str) -> String {
+        format!(
+            r#"
+local proto = prototypes.entity["{}"]
+if proto then
+    local result = {{
+        name = proto.name,
+        type = proto.type,
+    }}
+
+    -- Helper to safely get property
+    local function try_get(fn)
+        local ok, val = pcall(fn)
+        if ok then return val end
+        return nil
+    end
+
+    -- Calculate size from collision box
+    local cb = try_get(function() return proto.collision_box end)
+    if cb then
+        result.size = {{
+            cb.right_bottom.x - cb.left_top.x,
+            cb.right_bottom.y - cb.left_top.y
+        }}
+    end
+
+    -- Crafting machine properties (use method for speed)
+    local craft_speed = try_get(function() return proto.get_crafting_speed() end)
+    if craft_speed then
+        result.crafting_speed = craft_speed
+    end
+    local craft_cats = try_get(function() return proto.crafting_categories end)
+    if craft_cats then
+        result.crafting_categories = {{}}
+        for cat, _ in pairs(craft_cats) do
+            table.insert(result.crafting_categories, cat)
+        end
+    end
+
+    -- Mining drill properties
+    local mining_speed = try_get(function() return proto.mining_speed end)
+    if mining_speed then
+        result.mining_speed = mining_speed
+    end
+    local res_cats = try_get(function() return proto.resource_categories end)
+    if res_cats then
+        result.resource_categories = {{}}
+        for cat, _ in pairs(res_cats) do
+            table.insert(result.resource_categories, cat)
+        end
+    end
+
+    -- Inserter properties
+    local rot_speed = try_get(function() return proto.inserter_rotation_speed end)
+    if rot_speed then
+        result.rotation_speed = rot_speed
+    end
+    local ext_speed = try_get(function() return proto.inserter_extension_speed end)
+    if ext_speed then
+        result.extension_speed = ext_speed
+    end
+
+    -- Belt properties
+    local belt_speed = try_get(function() return proto.belt_speed end)
+    if belt_speed then
+        result.belt_speed = belt_speed
+    end
+
+    -- Energy
+    local energy = try_get(function() return proto.energy_usage end)
+    if energy then
+        result.energy_usage = energy
+    end
+
+    -- Energy source
+    if try_get(function() return proto.burner_prototype end) then
+        result.energy_source = "burner"
+    elseif try_get(function() return proto.electric_energy_source_prototype end) then
+        result.energy_source = "electric"
+    elseif try_get(function() return proto.heat_energy_source_prototype end) then
+        result.energy_source = "heat"
+    elseif try_get(function() return proto.void_energy_source_prototype end) then
+        result.energy_source = "void"
+    end
+
+    rcon.print(helpers.table_to_json(result))
+else
+    rcon.print('{{"error": "Prototype not found"}}')
+end
+"#,
+            name
+        )
+        .trim()
+        .to_string()
+    }
+
+    // --- Native Blueprint Commands ---
+
+    /// Create a native Factorio blueprint string from entities in an area
+    pub fn create_native_blueprint(area: Area) -> String {
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local player = game.get_player(1)
+if not player then
+    rcon.print('{{"error": "No player"}}')
+    return
+end
+
+local inv = player.get_main_inventory()
+if not inv then
+    rcon.print('{{"error": "No inventory"}}')
+    return
+end
+
+local slot = inv[1]
+local saved_item = slot.valid_for_read and slot.name or nil
+slot.set_stack{{name = "blueprint"}}
+
+local count = slot.create_blueprint{{
+    surface = surface,
+    force = "player",
+    area = {{{{{}, {}}}, {{{}, {}}}}},
+    include_entities = true,
+    include_tiles = false
+}}
+
+if count == 0 then
+    slot.clear()
+    if saved_item then slot.set_stack{{name = saved_item}} end
+    rcon.print('{{"error": "No entities in area"}}')
+else
+    local bp_string = slot.export_stack()
+    slot.clear()
+    if saved_item then slot.set_stack{{name = saved_item}} end
+    rcon.print(helpers.table_to_json({{
+        blueprint_string = bp_string,
+        entity_count = count
+    }}))
+end
+"#,
+            area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Save a blueprint to storage with a name
+    pub fn save_blueprint(name: &str, area: Area) -> String {
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local player = game.get_player(1)
+if not player then
+    rcon.print('{{"success": false, "error": "No player"}}')
+    return
+end
+
+local inv = player.get_main_inventory()
+if not inv then
+    rcon.print('{{"success": false, "error": "No inventory"}}')
+    return
+end
+
+local slot = inv[1]
+local saved_item = slot.valid_for_read and slot.name or nil
+slot.set_stack{{name = "blueprint"}}
+
+local count = slot.create_blueprint{{
+    surface = surface,
+    force = "player",
+    area = {{{{{}, {}}}, {{{}, {}}}}},
+    include_entities = true
+}}
+
+if count == 0 then
+    slot.clear()
+    if saved_item then slot.set_stack{{name = saved_item}} end
+    rcon.print('{{"success": false, "error": "No entities in area"}}')
+else
+    storage.blueprints = storage.blueprints or {{}}
+    storage.blueprints["{}"] = {{
+        string = slot.export_stack(),
+        entity_count = count
+    }}
+    slot.clear()
+    if saved_item then slot.set_stack{{name = saved_item}} end
+    rcon.print('{{"success": true, "entity_count": ' .. count .. '}}')
+end
+"#,
+            area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y, name
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// List all saved blueprints
+    pub fn list_blueprints() -> String {
+        r#"
+storage.blueprints = storage.blueprints or {}
+local result = {}
+for name, data in pairs(storage.blueprints) do
+    table.insert(result, {
+        name = name,
+        entity_count = data.entity_count
+    })
+end
+rcon.print(helpers.table_to_json(result))
+"#
+        .trim()
+        .to_string()
+    }
+
+    /// Get a saved blueprint string by name
+    pub fn get_blueprint(name: &str) -> String {
+        format!(
+            r#"
+storage.blueprints = storage.blueprints or {{}}
+local data = storage.blueprints["{}"]
+if data then
+    rcon.print(helpers.table_to_json({{
+        blueprint_string = data.string,
+        entity_count = data.entity_count
+    }}))
+else
+    rcon.print('{{"error": "Blueprint not found"}}')
+end
+"#,
+            name
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Place a saved blueprint at a position
+    pub fn place_blueprint(name: &str, position: Position, direction: u8) -> String {
+        format!(
+            r#"
+storage.blueprints = storage.blueprints or {{}}
+local data = storage.blueprints["{}"]
+if not data then
+    rcon.print('{{"success": false, "error": "Blueprint not found"}}')
+    return
+end
+
+local player = game.get_player(1)
+if not player then
+    rcon.print('{{"success": false, "error": "No player"}}')
+    return
+end
+
+local inv = player.get_main_inventory()
+if not inv then
+    rcon.print('{{"success": false, "error": "No inventory"}}')
+    return
+end
+
+local slot = inv[1]
+local saved_item = slot.valid_for_read and slot.name or nil
+slot.set_stack{{name = "blueprint"}}
+slot.import_stack(data.string)
+
+local ghosts = slot.build_blueprint{{
+    surface = game.surfaces[1],
+    force = "player",
+    position = {{ x = {}, y = {} }},
+    direction = {},
+    force_build = true
+}}
+
+slot.clear()
+if saved_item then slot.set_stack{{name = saved_item}} end
+
+rcon.print(helpers.table_to_json({{
+    success = true,
+    ghosts_created = #ghosts
+}}))
+"#,
+            name, position.x, position.y, direction
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Import and place a blueprint from a string
+    pub fn import_blueprint(bp_string: &str, position: Position, direction: u8) -> String {
+        format!(
+            r#"
+local player = game.get_player(1)
+if not player then
+    rcon.print('{{"success": false, "error": "No player"}}')
+    return
+end
+
+local inv = player.get_main_inventory()
+if not inv then
+    rcon.print('{{"success": false, "error": "No inventory"}}')
+    return
+end
+
+local slot = inv[1]
+local saved_item = slot.valid_for_read and slot.name or nil
+slot.set_stack{{name = "blueprint"}}
+
+local ok = slot.import_stack("{}")
+if not ok then
+    slot.clear()
+    if saved_item then slot.set_stack{{name = saved_item}} end
+    rcon.print('{{"success": false, "error": "Invalid blueprint string"}}')
+    return
+end
+
+local ghosts = slot.build_blueprint{{
+    surface = game.surfaces[1],
+    force = "player",
+    position = {{ x = {}, y = {} }},
+    direction = {},
+    force_build = true
+}}
+
+slot.clear()
+if saved_item then slot.set_stack{{name = saved_item}} end
+
+rcon.print(helpers.table_to_json({{
+    success = true,
+    ghosts_created = #ghosts
+}}))
+"#,
+            bp_string, position.x, position.y, direction
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Delete a saved blueprint
+    pub fn delete_blueprint(name: &str) -> String {
+        format!(
+            r#"
+storage.blueprints = storage.blueprints or {{}}
+if storage.blueprints["{}"] then
+    storage.blueprints["{}"] = nil
+    rcon.print('{{"success": true}}')
+else
+    rcon.print('{{"success": false, "error": "Blueprint not found"}}')
+end
+"#,
+            name, name
         )
         .trim()
         .to_string()

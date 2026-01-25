@@ -81,6 +81,28 @@ pub enum GetSubcommand {
         #[arg(allow_hyphen_values = true)]
         position: String,
     },
+
+    /// Get a recipe by name
+    Recipe {
+        /// Recipe name (e.g., "iron-plate")
+        name: Option<String>,
+
+        /// Filter by category (e.g., "smelting")
+        #[arg(long)]
+        category: Option<String>,
+    },
+
+    /// Get an entity prototype
+    Prototype {
+        /// Entity prototype name (e.g., "stone-furnace")
+        name: String,
+    },
+
+    /// Get all recipes that produce an item
+    RecipesFor {
+        /// Item name (e.g., "iron-plate")
+        item: String,
+    },
 }
 
 pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
@@ -143,6 +165,25 @@ pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<(
             let pos = parse_position(&position)?;
             let tile = client.get_tile(pos).await?;
             Output::new(conn.output).print(&tile)?;
+        }
+        GetSubcommand::Recipe { name, category } => {
+            if let Some(recipe_name) = name {
+                let recipe = client.get_recipe(&recipe_name).await?;
+                Output::new(conn.output).print(&recipe)?;
+            } else if let Some(cat) = category {
+                let recipes = client.get_recipes_by_category(&cat).await?;
+                Output::new(conn.output).print(&recipes)?;
+            } else {
+                anyhow::bail!("Either recipe name or --category must be specified");
+            }
+        }
+        GetSubcommand::Prototype { name } => {
+            let prototype = client.get_prototype(&name).await?;
+            Output::new(conn.output).print(&prototype)?;
+        }
+        GetSubcommand::RecipesFor { item } => {
+            let recipes = client.get_recipes_for_item(&item).await?;
+            Output::new(conn.output).print(&recipes)?;
         }
     }
 

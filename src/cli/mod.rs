@@ -16,6 +16,7 @@ pub mod map;
 pub mod mine;
 pub mod place;
 pub mod remove;
+pub mod route;
 pub mod server;
 pub mod set_recipe;
 pub mod tick;
@@ -147,4 +148,7 @@ pub enum Commands {
 
     /// Render ASCII map of an area
     Map(map::MapCommand),
+
+    /// Route entities (pathfinding for belts)
+    Route(route::RouteCommand),
 }
