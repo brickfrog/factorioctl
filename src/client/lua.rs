@@ -802,7 +802,8 @@ if not can_place then
 end
 
 -- Double-check for overlapping entities (can_place_entity may miss some cases)
-local proto = game.entity_prototypes["{}"]
+-- Use prototypes.entity for Factorio 2.0 compatibility
+local proto = prototypes.entity["{}"]
 if proto and proto.collision_box then
     local cb = proto.collision_box
     local check_area = {{
@@ -810,8 +811,7 @@ if proto and proto.collision_box then
         {{ {} + cb.right_bottom.x, {} + cb.right_bottom.y }}
     }}
     local overlapping = game.surfaces[1].find_entities_filtered{{
-        area = check_area,
-        collision_mask = proto.collision_mask
+        area = check_area
     }}
     -- Filter out resources (can build on ore) and the character
     local blocking = {{}}
@@ -1524,6 +1524,49 @@ end
 "#,
             name, name
         )
+        .trim()
+        .to_string()
+    }
+
+    /// Register chat message handler (captures player chat for LLM agent)
+    pub fn register_chat_handler() -> String {
+        r#"
+if not storage.factorioctl_chat then
+    storage.factorioctl_chat = { messages = {}, handler_registered = false }
+end
+if not storage.factorioctl_chat.handler_registered then
+    script.on_event(defines.events.on_console_chat, function(event)
+        local player_name = "console"
+        if event.player_index then
+            local p = game.get_player(event.player_index)
+            if p then player_name = p.name end
+        end
+        table.insert(storage.factorioctl_chat.messages, {
+            player = player_name,
+            message = event.message,
+            tick = event.tick
+        })
+    end)
+    storage.factorioctl_chat.handler_registered = true
+    rcon.print("registered")
+else
+    rcon.print("already_registered")
+end
+"#
+        .trim()
+        .to_string()
+    }
+
+    /// Get and clear pending chat messages
+    pub fn get_and_clear_chat_messages() -> String {
+        r#"
+if not storage.factorioctl_chat then
+    storage.factorioctl_chat = { messages = {}, handler_registered = false }
+end
+local msgs = storage.factorioctl_chat.messages
+storage.factorioctl_chat.messages = {}
+rcon.print(helpers.table_to_json(msgs))
+"#
         .trim()
         .to_string()
     }

@@ -235,6 +235,15 @@ pub struct FactorioMcp {
     tool_router: ToolRouter<Self>,
 }
 
+/// Chat message from a player
+#[derive(Debug, Deserialize)]
+struct ChatMessage {
+    player: String,
+    message: String,
+    #[allow(dead_code)]
+    tick: u64,
+}
+
 impl FactorioMcp {
     fn new() -> Self {
         Self {
@@ -249,6 +258,40 @@ impl FactorioMcp {
             .await
             .map_err(|e| format!("Failed to connect: {}", e))
     }
+
+    /// Fetch pending player messages and clear them from the queue.
+    /// Returns formatted string if there are messages, None otherwise.
+    async fn fetch_player_messages(&self) -> Option<String> {
+        let mut client = self.connect().await.ok()?;
+
+        // First ensure the chat handler is registered
+        let register_lua = factorioctl::client::lua::LuaCommand::register_chat_handler();
+        let _ = client.execute_lua(&register_lua).await;
+
+        // Then fetch and clear messages
+        let fetch_lua = factorioctl::client::lua::LuaCommand::get_and_clear_chat_messages();
+        let response = client.execute_lua(&fetch_lua).await.ok()?;
+
+        let messages: Vec<ChatMessage> = serde_json::from_str(&response).ok()?;
+
+        if messages.is_empty() {
+            None
+        } else {
+            let formatted: Vec<String> = messages
+                .iter()
+                .map(|m| format!("[{}]: {}", m.player, m.message))
+                .collect();
+            Some(format!("\n\n--- Player Messages ---\n{}", formatted.join("\n")))
+        }
+    }
+
+    /// Append any pending player messages to a result string
+    async fn with_player_messages(&self, result: String) -> String {
+        match self.fetch_player_messages().await {
+            Some(msgs) => format!("{}{}", result, msgs),
+            None => result,
+        }
+    }
 }
 
 #[tool_router]
@@ -260,7 +303,7 @@ impl FactorioMcp {
     async fn get_entities(&self, Parameters(params): Parameters<GetEntitiesParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
         let area = Area {
@@ -268,7 +311,7 @@ impl FactorioMcp {
             right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
         };
 
-        match client.find_entities(area, None, params.name.as_deref()).await {
+        let result = match client.find_entities(area, None, params.name.as_deref()).await {
             Ok(entities) => {
                 let info: Vec<serde_json::Value> = entities
                     .into_iter()
@@ -284,7 +327,8 @@ impl FactorioMcp {
                 serde_json::to_string_pretty(&info).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Get resource patches (ore, oil) in an area.
@@ -292,7 +336,7 @@ impl FactorioMcp {
     async fn get_resources(&self, Parameters(params): Parameters<GetResourcesParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
         let area = Area {
@@ -300,7 +344,7 @@ impl FactorioMcp {
             right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
         };
 
-        match client.find_resources(area, params.resource_type.as_deref()).await {
+        let result = match client.find_resources(area, params.resource_type.as_deref()).await {
             Ok(resources) => {
                 let info: Vec<serde_json::Value> = resources
                     .into_iter()
@@ -315,7 +359,8 @@ impl FactorioMcp {
                 serde_json::to_string_pretty(&info).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Get current character status including position and health.
@@ -323,10 +368,10 @@ impl FactorioMcp {
     async fn get_character(&self) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.character_status().await {
+        let result = match client.character_status().await {
             Ok(status) => {
                 let info = serde_json::json!({
                     "valid": status.valid,
@@ -338,7 +383,8 @@ impl FactorioMcp {
                 serde_json::to_string_pretty(&info).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Get character inventory contents.
@@ -346,10 +392,10 @@ impl FactorioMcp {
     async fn get_inventory(&self) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.character_inventory().await {
+        let result = match client.character_inventory().await {
             Ok(inventory) => {
                 let items: Vec<serde_json::Value> = inventory
                     .items
@@ -362,7 +408,8 @@ impl FactorioMcp {
                 serde_json::to_string_pretty(&items).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Get current game tick.
@@ -370,13 +417,14 @@ impl FactorioMcp {
     async fn get_tick(&self) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.get_tick().await {
+        let result = match client.get_tick().await {
             Ok(tick) => format!("Tick: {} ({:.1} seconds)", tick.tick, tick.to_seconds()),
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     // --- Analysis Tools ---
@@ -386,7 +434,7 @@ impl FactorioMcp {
     async fn analyze_belt_reach(&self, Parameters(params): Parameters<BeltReachParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
         let area = Area {
@@ -394,20 +442,21 @@ impl FactorioMcp {
             right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
         };
 
-        match client.find_entities(area, None, None).await {
+        let result = match client.find_entities(area, None, None).await {
             Ok(entities) => {
                 let graph = BeltGraph::from_entities(&entities);
                 let start = TilePos::new(params.x, params.y);
 
                 match analyze_belt_reach(&graph, start) {
-                    Some(result) => {
-                        serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e))
+                    Some(r) => {
+                        serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e))
                     }
                     None => format!("No belt found at ({}, {})", params.x, params.y),
                 }
             }
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Find all connected belt networks in an area.
@@ -415,17 +464,18 @@ impl FactorioMcp {
     async fn analyze_belt_networks(&self, Parameters(params): Parameters<AreaParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.find_entities(params.to_area(), None, None).await {
+        let result = match client.find_entities(params.to_area(), None, None).await {
             Ok(entities) => {
                 let graph = BeltGraph::from_entities(&entities);
-                let result = find_belt_networks(&graph);
-                serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e))
+                let r = find_belt_networks(&graph);
+                serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Find gaps in belt lines.
@@ -433,17 +483,18 @@ impl FactorioMcp {
     async fn analyze_belt_gaps(&self, Parameters(params): Parameters<AreaParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.find_entities(params.to_area(), None, None).await {
+        let result = match client.find_entities(params.to_area(), None, None).await {
             Ok(entities) => {
                 let graph = BeltGraph::from_entities(&entities);
-                let result = find_belt_gaps(&graph, &entities);
-                serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e))
+                let r = find_belt_gaps(&graph, &entities);
+                serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Analyze inserters in an area.
@@ -451,16 +502,17 @@ impl FactorioMcp {
     async fn analyze_inserters(&self, Parameters(params): Parameters<AreaParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.find_entities(params.to_area(), None, None).await {
+        let result = match client.find_entities(params.to_area(), None, None).await {
             Ok(entities) => {
-                let results = analyze_inserters(&entities);
-                serde_json::to_string_pretty(&results).unwrap_or_else(|e| format!("Error: {}", e))
+                let r = analyze_inserters(&entities);
+                serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     // --- Action Tools ---
@@ -470,14 +522,15 @@ impl FactorioMcp {
     async fn walk_to(&self, Parameters(params): Parameters<PositionParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
         let position = Position::new(params.x, params.y);
-        match client.walk_to(position, true).await {
-            Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e)),
+        let result = match client.walk_to(position, true).await {
+            Ok(r) => serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e)),
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Place an entity from character inventory.
@@ -485,16 +538,17 @@ impl FactorioMcp {
     async fn place_entity(&self, Parameters(params): Parameters<PlaceEntityParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
         let position = Position::new(params.x, params.y);
         let direction = Direction::from_factorio(params.direction);
 
-        match client.place_entity(&params.entity_name, position, direction).await {
-            Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e)),
+        let result = match client.place_entity(&params.entity_name, position, direction).await {
+            Ok(r) => serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e)),
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Mine entities at a position.
@@ -502,14 +556,15 @@ impl FactorioMcp {
     async fn mine_at(&self, Parameters(params): Parameters<MineAtParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
         let position = Position::new(params.x, params.y);
-        match client.mine_at(position, params.count).await {
+        let result = match client.mine_at(position, params.count).await {
             Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e)),
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Craft items.
@@ -517,13 +572,14 @@ impl FactorioMcp {
     async fn craft(&self, Parameters(params): Parameters<CraftParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.craft(&params.recipe, params.count).await {
+        let result = match client.craft(&params.recipe, params.count).await {
             Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e)),
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Insert items into an entity.
@@ -531,13 +587,14 @@ impl FactorioMcp {
     async fn insert_items(&self, Parameters(params): Parameters<InsertItemsParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.insert_items(params.unit_number, &params.item, params.count, &params.inventory_type).await {
+        let result = match client.insert_items(params.unit_number, &params.item, params.count, &params.inventory_type).await {
             Ok(()) => format!("Inserted {} {} into entity", params.count, params.item),
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Remove an entity.
@@ -545,13 +602,14 @@ impl FactorioMcp {
     async fn remove_entity(&self, Parameters(params): Parameters<RemoveEntityParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.remove_entity(params.unit_number).await {
+        let result = match client.remove_entity(params.unit_number).await {
             Ok(()) => "Entity removed successfully".to_string(),
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Route belts from point A to point B using A* pathfinding.
@@ -560,7 +618,7 @@ impl FactorioMcp {
     async fn route_belt(&self, Parameters(params): Parameters<RouteBeltParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
         // Calculate search area
@@ -579,7 +637,7 @@ impl FactorioMcp {
         // Build collision map
         let collision_map = match client.build_collision_map(area).await {
             Ok(cm) => cm,
-            Err(e) => return format!("Error building collision map: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error building collision map: {}", e)).await,
         };
 
         // Find path
@@ -588,16 +646,16 @@ impl FactorioMcp {
         let result = find_belt_route(start, goal, &collision_map);
 
         if !result.success {
-            return format!("Route failed: {}", result.error.unwrap_or_else(|| "unknown error".to_string()));
+            return self.with_player_messages(format!("Route failed: {}", result.error.unwrap_or_else(|| "unknown error".to_string()))).await;
         }
 
         if params.dry_run {
-            return format!(
+            return self.with_player_messages(format!(
                 "Dry run - would place {} belts with {} turns:\n{}",
                 result.belt_count,
                 result.turn_count,
                 serde_json::to_string_pretty(&result.belts).unwrap_or_default()
-            );
+            )).await;
         }
 
         // Place the belts
@@ -611,7 +669,7 @@ impl FactorioMcp {
             }
         }
 
-        if errors.is_empty() {
+        let result_msg = if errors.is_empty() {
             format!("Successfully placed {} belts with {} turns", placed, result.turn_count)
         } else {
             format!(
@@ -620,7 +678,8 @@ impl FactorioMcp {
                 result.belt_count,
                 errors.join("\n")
             )
-        }
+        };
+        self.with_player_messages(result_msg).await
     }
 
     /// Execute raw Lua command.
@@ -628,13 +687,14 @@ impl FactorioMcp {
     async fn execute_lua(&self, Parameters(params): Parameters<ExecuteLuaParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
-            Err(e) => return format!("Error: {}", e),
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
         };
 
-        match client.execute_lua(&params.lua).await {
+        let result = match client.execute_lua(&params.lua).await {
             Ok(result) => result,
             Err(e) => format!("Error: {}", e),
-        }
+        };
+        self.with_player_messages(result).await
     }
 
     /// Broadcast a thought or message to the human player.
@@ -753,11 +813,12 @@ impl FactorioMcp {
             }
         }
 
-        if results.is_empty() {
+        let result = if results.is_empty() {
             "No output enabled (check broadcast config in .factorioctl.json)".to_string()
         } else {
             results.join(", ")
-        }
+        };
+        self.with_player_messages(result).await
     }
 }
 
