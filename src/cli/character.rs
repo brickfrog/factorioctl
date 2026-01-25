@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::Output;
-use crate::world::Position;
+use crate::world::{Position, TilePos};
 
 #[derive(Args, Debug)]
 pub struct CharacterCommand {
@@ -19,16 +19,16 @@ pub enum CharacterSubcommand {
     /// Initialize/create character at spawn
     Init,
 
-    /// Teleport character to position
+    /// Teleport character to position (debug command, accepts floats)
     Teleport {
-        /// Target position (x,y)
+        /// Target position (x,y as floats)
         #[arg(allow_hyphen_values = true)]
         position: String,
     },
 
-    /// Walk character to position (pathfinding)
+    /// Walk character to position
     Walk {
-        /// Target position
+        /// Target tile position (x,y as integers)
         #[arg(long, allow_hyphen_values = true)]
         to: String,
     },
@@ -54,9 +54,10 @@ pub async fn execute(cmd: CharacterCommand, conn: &ResolvedConnectionArgs) -> Re
             println!("Teleported to ({}, {})", pos.x, pos.y);
         }
         CharacterSubcommand::Walk { to } => {
-            let pos = parse_position(&to)?;
+            let tile = parse_tile(&to)?;
+            let pos = tile.to_world_1x1();
             client.walk_character(pos).await?;
-            println!("Walking to ({}, {})", pos.x, pos.y);
+            println!("Walking to tile ({}, {})", tile.x, tile.y);
         }
         CharacterSubcommand::Status => {
             let status = client.character_status().await?;
@@ -84,4 +85,23 @@ fn parse_position(s: &str) -> Result<Position> {
         x: parts[0],
         y: parts[1],
     })
+}
+
+/// Parse integer tile coordinates (x,y)
+fn parse_tile(s: &str) -> Result<TilePos> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Position must be x,y (integers)");
+    }
+
+    let x: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
+    let y: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+
+    Ok(TilePos::new(x, y))
 }

@@ -24,7 +24,64 @@ pub use tile::*;
 
 use serde::{Deserialize, Serialize};
 
-/// A position in the game world
+/// Integer tile coordinates (primary coordinate system for CLI)
+/// In Factorio, tiles are 1x1 squares. Entities are placed at their center.
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Default, Serialize, Deserialize)]
+pub struct TilePos {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl TilePos {
+    pub fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+
+    /// Convert to world position for a 1x1 entity (center of tile)
+    pub fn to_world_1x1(&self) -> Position {
+        Position {
+            x: self.x as f64 + 0.5,
+            y: self.y as f64 + 0.5,
+        }
+    }
+
+    /// Convert to world position for a 2x2 entity (center of 4 tiles)
+    pub fn to_world_2x2(&self) -> Position {
+        Position {
+            x: self.x as f64 + 1.0,
+            y: self.y as f64 + 1.0,
+        }
+    }
+
+    /// Convert to world position for a 3x3 entity
+    pub fn to_world_3x3(&self) -> Position {
+        Position {
+            x: self.x as f64 + 1.5,
+            y: self.y as f64 + 1.5,
+        }
+    }
+
+    /// Convert to world position for entity of given size (width, height)
+    pub fn to_world(&self, width: u32, height: u32) -> Position {
+        Position {
+            x: self.x as f64 + width as f64 / 2.0,
+            y: self.y as f64 + height as f64 / 2.0,
+        }
+    }
+
+    /// Manhattan distance to another tile
+    pub fn manhattan_distance(&self, other: &TilePos) -> u32 {
+        ((self.x - other.x).abs() + (self.y - other.y).abs()) as u32
+    }
+}
+
+impl std::fmt::Display for TilePos {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+
+/// A position in the game world (float coordinates for Factorio API)
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Position {
     pub x: f64,
@@ -34,6 +91,14 @@ pub struct Position {
 impl Position {
     pub fn new(x: f64, y: f64) -> Self {
         Self { x, y }
+    }
+
+    /// Convert to tile position (floor to get the tile this position is in)
+    pub fn to_tile(&self) -> TilePos {
+        TilePos {
+            x: self.x.floor() as i32,
+            y: self.y.floor() as i32,
+        }
     }
 
     /// Calculate squared distance to another position
@@ -46,6 +111,12 @@ impl Position {
     /// Calculate distance to another position
     pub fn distance(&self, other: &Position) -> f64 {
         self.distance_squared(other).sqrt()
+    }
+}
+
+impl std::fmt::Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({:.1}, {:.1})", self.x, self.y)
     }
 }
 
@@ -88,6 +159,81 @@ impl Area {
             && pos.x <= self.right_bottom.x
             && pos.y >= self.left_top.y
             && pos.y <= self.right_bottom.y
+    }
+}
+
+/// Area defined by integer tile corners (inclusive)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TileArea {
+    pub min: TilePos,
+    pub max: TilePos,
+}
+
+impl TileArea {
+    pub fn new(x1: i32, y1: i32, x2: i32, y2: i32) -> Self {
+        Self {
+            min: TilePos::new(x1.min(x2), y1.min(y2)),
+            max: TilePos::new(x1.max(x2), y1.max(y2)),
+        }
+    }
+
+    /// Convert to world area for Factorio queries
+    /// The max position is exclusive in world coordinates (adds 1)
+    pub fn to_world(&self) -> Area {
+        Area {
+            left_top: Position::new(self.min.x as f64, self.min.y as f64),
+            right_bottom: Position::new((self.max.x + 1) as f64, (self.max.y + 1) as f64),
+        }
+    }
+
+    /// Check if a tile is within this area (inclusive)
+    pub fn contains(&self, tile: &TilePos) -> bool {
+        tile.x >= self.min.x
+            && tile.x <= self.max.x
+            && tile.y >= self.min.y
+            && tile.y <= self.max.y
+    }
+}
+
+/// Get entity size (width, height) for common entities
+/// This is used to convert tile positions to world positions for placement
+pub fn entity_size(name: &str) -> (u32, u32) {
+    match name {
+        // 1x1 entities
+        n if n.contains("belt") && !n.contains("splitter") => (1, 1),
+        n if n.contains("inserter") => (1, 1),
+        n if n.contains("pole") => (1, 1),
+        n if n.contains("pipe") && !n.contains("pump") => (1, 1),
+        n if n.contains("chest") => (1, 1),
+        "lamp" | "small-lamp" => (1, 1),
+
+        // 1x2 entities
+        "offshore-pump" => (1, 2),
+        n if n.contains("pump") && !n.contains("offshore") => (1, 2),
+
+        // 2x1 entities
+        n if n.contains("splitter") => (2, 1),
+
+        // 2x2 entities
+        "stone-furnace" | "steel-furnace" | "electric-furnace" => (2, 2),
+        "burner-mining-drill" | "electric-mining-drill" => (2, 2),
+        "boiler" => (2, 2),
+        "steam-engine" => (3, 5),
+        "pumpjack" => (3, 3),
+
+        // 3x3 entities
+        n if n.starts_with("assembling-machine") => (3, 3),
+        "chemical-plant" => (3, 3),
+        "lab" => (3, 3),
+        "radar" => (3, 3),
+        "centrifuge" => (3, 3),
+        "rocket-silo" => (9, 9),
+
+        // 5x5 entities
+        "oil-refinery" => (5, 5),
+
+        // Default to 1x1
+        _ => (1, 1),
     }
 }
 

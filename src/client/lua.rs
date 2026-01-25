@@ -1262,13 +1262,14 @@ local slot = inv[1]
 local saved_item = slot.valid_for_read and slot.name or nil
 slot.set_stack{{name = "blueprint"}}
 
-local count = slot.create_blueprint{{
+local entities = slot.create_blueprint{{
     surface = surface,
     force = "player",
     area = {{{{{}, {}}}, {{{}, {}}}}},
     include_entities = true,
     include_tiles = false
 }}
+local count = #entities
 
 if count == 0 then
     slot.clear()
@@ -1311,12 +1312,13 @@ local slot = inv[1]
 local saved_item = slot.valid_for_read and slot.name or nil
 slot.set_stack{{name = "blueprint"}}
 
-local count = slot.create_blueprint{{
+local entities = slot.create_blueprint{{
     surface = surface,
     force = "player",
     area = {{{{{}, {}}}, {{{}, {}}}}},
     include_entities = true
 }}
+local count = #entities
 
 if count == 0 then
     slot.clear()

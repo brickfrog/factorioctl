@@ -6,14 +6,14 @@ use clap::Args;
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::Output;
-use crate::world::{Direction, Position};
+use crate::world::{entity_size, Direction, TilePos};
 
 #[derive(Args, Debug)]
 pub struct PlaceCommand {
     /// Entity name to place
     pub entity_name: String,
 
-    /// Position to place at (x,y)
+    /// Tile position to place at (x,y as integers)
     #[arg(long, allow_hyphen_values = true)]
     pub at: String,
 
@@ -25,33 +25,42 @@ pub struct PlaceCommand {
 pub async fn execute(cmd: PlaceCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
     let mut client = FactorioClient::connect(&conn.host, conn.port, &conn.password).await?;
 
-    let pos = parse_position(&cmd.at)?;
+    let tile = parse_tile(&cmd.at)?;
     let dir = parse_direction(&cmd.direction)?;
+
+    // Get entity size and compute world position (center of entity)
+    let (width, height) = entity_size(&cmd.entity_name);
+    let world_pos = tile.to_world(width, height);
 
     // Check proximity before placing
     client
-        .ensure_proximity_to_position(pos, crate::client::PROXIMITY_RANGE_PLACE)
+        .ensure_proximity_to_position(world_pos, crate::client::PROXIMITY_RANGE_PLACE)
         .await?;
 
-    let entity = client.place_entity(&cmd.entity_name, pos, dir).await?;
+    let entity = client.place_entity(&cmd.entity_name, world_pos, dir).await?;
     Output::new(conn.output).print(&entity)?;
 
     client.close().await?;
     Ok(())
 }
 
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
+/// Parse integer tile coordinates (x,y)
+fn parse_tile(s: &str) -> Result<TilePos> {
+    let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
+        anyhow::bail!("Position must be x,y (integers)");
     }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
+
+    let x: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
+    let y: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+
+    Ok(TilePos::new(x, y))
 }
 
 fn parse_direction(s: &str) -> Result<Direction> {

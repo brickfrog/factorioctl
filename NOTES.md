@@ -95,6 +95,55 @@ Coal miners at (78, -22) and (78, -24):
 3. Scale up production
 4. Research more technologies
 
+## Grid-Based Positioning System
+
+The CLI uses **integer tile coordinates** for all position inputs. Factorio operates on a strict tile grid (1x1 squares), and entity placement uses center coordinates.
+
+### How It Works
+
+When you specify a position like `--at 47,-24`:
+- The CLI parses this as tile position (47, -24)
+- Based on entity size, it computes the correct center position:
+  - 1x1 entities (belts, inserters): center at (47.5, -24.5)
+  - 2x2 entities (drills, furnaces): center at (48, -25)
+  - 3x3 entities (assemblers): center at (48.5, -25.5)
+
+### Entity Sizes
+
+| Size | Entity Types |
+|------|-------------|
+| 1x1 | belts, inserters, poles, pipes, chests |
+| 2x2 | drills, furnaces, boilers |
+| 1x2 | pumps |
+| 2x1 | splitters |
+| 3x3 | assembling machines, labs, radar |
+| 3x5 | steam engine |
+| 5x5 | oil refinery |
+| 9x9 | rocket silo |
+
+### Examples
+
+```bash
+# Place a belt at tile (10, 20)
+factorioctl place transport-belt --at 10,20 --direction east
+
+# Place a furnace at tile (50, -24) - 2x2, will center at (51, -25)
+factorioctl place stone-furnace --at 50,-24
+
+# Query entities in area from tile (45,-30) to (55,-20)
+factorioctl get entities --area 45,-30,55,-20
+
+# Walk to tile (50, 20)
+factorioctl walk-to 50,20
+```
+
+### Why Integer Coordinates?
+
+- Factorio's grid is integer-based
+- Removes confusion about 0.5 offsets
+- Entity size is handled automatically
+- Cleaner mental model for automation
+
 ## A* Pathfinding
 
 The CLI now supports A* pathfinding for both walking and belt routing:

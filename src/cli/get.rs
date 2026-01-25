@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::Output;
-use crate::world::{Area, Position};
+use crate::world::{TileArea, TilePos};
 
 #[derive(Args, Debug)]
 pub struct GetCommand {
@@ -24,7 +24,7 @@ pub enum GetSubcommand {
 
     /// Query entities in an area
     Entities {
-        /// Area to search (x1,y1,x2,y2)
+        /// Area to search (x1,y1,x2,y2 as integers, inclusive)
         #[arg(long, allow_hyphen_values = true)]
         area: String,
 
@@ -51,7 +51,7 @@ pub enum GetSubcommand {
 
     /// Query resources in an area
     Resources {
-        /// Area to search (x1,y1,x2,y2)
+        /// Area to search (x1,y1,x2,y2 as integers, inclusive)
         #[arg(long, allow_hyphen_values = true)]
         area: Option<String>,
 
@@ -63,21 +63,21 @@ pub enum GetSubcommand {
         #[arg(long)]
         nearest: Option<String>,
 
-        /// Origin position for nearest search (x,y)
+        /// Origin tile position for nearest search (x,y as integers)
         #[arg(long, allow_hyphen_values = true)]
         from: Option<String>,
     },
 
     /// Query tiles in an area
     Tiles {
-        /// Area to search (x1,y1,x2,y2)
+        /// Area to search (x1,y1,x2,y2 as integers, inclusive)
         #[arg(long, allow_hyphen_values = true)]
         area: String,
     },
 
     /// Get a specific tile
     Tile {
-        /// Position (x,y)
+        /// Tile position (x,y as integers)
         #[arg(allow_hyphen_values = true)]
         position: String,
     },
@@ -122,9 +122,10 @@ pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<(
             entity_type,
             name,
         } => {
-            let area = parse_area(&area)?;
+            let tile_area = parse_tile_area(&area)?;
+            let world_area = tile_area.to_world();
             let entities = client
-                .find_entities(area, entity_type.as_deref(), name.as_deref())
+                .find_entities(world_area, entity_type.as_deref(), name.as_deref())
                 .await?;
             Output::new(conn.output).print(&entities)?;
         }
@@ -143,13 +144,15 @@ pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<(
             from,
         } => {
             if let (Some(resource_name), Some(from_pos)) = (nearest, from) {
-                let pos = parse_position(&from_pos)?;
+                let tile = parse_tile(&from_pos)?;
+                let pos = tile.to_world_1x1();
                 let resource = client.find_nearest_resource(&resource_name, pos).await?;
                 Output::new(conn.output).print(&resource)?;
             } else if let Some(area_str) = area {
-                let area = parse_area(&area_str)?;
+                let tile_area = parse_tile_area(&area_str)?;
+                let world_area = tile_area.to_world();
                 let resources = client
-                    .find_resources(area, resource_type.as_deref())
+                    .find_resources(world_area, resource_type.as_deref())
                     .await?;
                 Output::new(conn.output).print(&resources)?;
             } else {
@@ -157,14 +160,16 @@ pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<(
             }
         }
         GetSubcommand::Tiles { area } => {
-            let area = parse_area(&area)?;
-            let tiles = client.get_tiles(area).await?;
+            let tile_area = parse_tile_area(&area)?;
+            let world_area = tile_area.to_world();
+            let tiles = client.get_tiles(world_area).await?;
             Output::new(conn.output).print(&tiles)?;
         }
         GetSubcommand::Tile { position } => {
-            let pos = parse_position(&position)?;
-            let tile = client.get_tile(pos).await?;
-            Output::new(conn.output).print(&tile)?;
+            let tile = parse_tile(&position)?;
+            let pos = tile.to_world_1x1();
+            let tile_result = client.get_tile(pos).await?;
+            Output::new(conn.output).print(&tile_result)?;
         }
         GetSubcommand::Recipe { name, category } => {
             if let Some(recipe_name) = name {
@@ -191,36 +196,48 @@ pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<(
     Ok(())
 }
 
-fn parse_area(s: &str) -> Result<Area> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
+/// Parse integer tile area (x1,y1,x2,y2 - inclusive corners)
+fn parse_tile_area(s: &str) -> Result<TileArea> {
+    let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 4 {
-        anyhow::bail!("Area must be x1,y1,x2,y2");
+        anyhow::bail!("Area must be x1,y1,x2,y2 (integers)");
     }
-    Ok(Area {
-        left_top: Position {
-            x: parts[0],
-            y: parts[1],
-        },
-        right_bottom: Position {
-            x: parts[2],
-            y: parts[3],
-        },
-    })
+
+    let x1: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("x1 must be an integer, got '{}'", parts[0].trim()))?;
+    let y1: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("y1 must be an integer, got '{}'", parts[1].trim()))?;
+    let x2: i32 = parts[2]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("x2 must be an integer, got '{}'", parts[2].trim()))?;
+    let y2: i32 = parts[3]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("y2 must be an integer, got '{}'", parts[3].trim()))?;
+
+    Ok(TileArea::new(x1, y1, x2, y2))
 }
 
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
+/// Parse integer tile position (x,y)
+fn parse_tile(s: &str) -> Result<TilePos> {
+    let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
+        anyhow::bail!("Position must be x,y (integers)");
     }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
+
+    let x: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
+    let y: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+
+    Ok(TilePos::new(x, y))
 }

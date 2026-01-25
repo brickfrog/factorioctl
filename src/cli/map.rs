@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::cli::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::{Area, Entity, Position};
+use crate::world::{Area, Entity, Position, TilePos};
 
 /// Execute the map command
 pub async fn execute(cmd: MapCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
@@ -17,13 +17,13 @@ pub async fn execute(cmd: MapCommand, conn: &ResolvedConnectionArgs) -> Result<(
 /// Render ASCII map of an area
 #[derive(Parser, Debug)]
 pub struct MapCommand {
-    /// Center X coordinate (default: character position)
-    #[arg(long)]
-    pub x: Option<f64>,
+    /// Center X tile coordinate (default: character position)
+    #[arg(long, allow_hyphen_values = true)]
+    pub x: Option<i32>,
 
-    /// Center Y coordinate (default: character position)
-    #[arg(long)]
-    pub y: Option<f64>,
+    /// Center Y tile coordinate (default: character position)
+    #[arg(long, allow_hyphen_values = true)]
+    pub y: Option<i32>,
 
     /// Map radius (tiles from center)
     #[arg(short, long, default_value = "15")]
@@ -53,7 +53,8 @@ impl MapCommand {
     pub async fn run(&self, client: &mut FactorioClient) -> Result<()> {
         // Get center position
         let center = if let (Some(x), Some(y)) = (self.x, self.y) {
-            Position { x, y }
+            // Use tile center for integer coordinates
+            TilePos::new(x, y).to_world_1x1()
         } else {
             client.get_character_position().await?
         };

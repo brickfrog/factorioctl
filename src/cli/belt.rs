@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::{find_belt_route, Area, GridPos, Position};
+use crate::world::{find_belt_route, Area, GridPos, Position, TilePos};
 
 #[derive(Args, Debug)]
 pub struct BeltCommand {
@@ -69,8 +69,11 @@ pub async fn execute(cmd: BeltCommand, conn: &ResolvedConnectionArgs) -> Result<
             search_radius,
             dry_run,
         } => {
-            let from_pos = parse_position(&from)?;
-            let to_pos = parse_position(&to)?;
+            let from_tile = parse_tile(&from)?;
+            let to_tile = parse_tile(&to)?;
+            // Belts are 1x1, use tile center
+            let from_pos = from_tile.to_world_1x1();
+            let to_pos = to_tile.to_world_1x1();
 
             run_belt_line_astar(&mut client, from_pos, to_pos, &belt, search_radius, dry_run)
                 .await?;
@@ -84,7 +87,7 @@ pub async fn execute(cmd: BeltCommand, conn: &ResolvedConnectionArgs) -> Result<
         } => {
             let points: Vec<Position> = waypoints
                 .split(';')
-                .map(|s| parse_position(s.trim()))
+                .map(|s| parse_tile(s.trim()).map(|t| t.to_world_1x1()))
                 .collect::<Result<Vec<_>>>()?;
 
             if points.len() < 2 {
@@ -226,16 +229,21 @@ async fn run_belt_line_astar(
     Ok(())
 }
 
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
+/// Parse integer tile coordinates (x,y)
+fn parse_tile(s: &str) -> Result<TilePos> {
+    let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
+        anyhow::bail!("Position must be x,y (integers)");
     }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
+
+    let x: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
+    let y: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+
+    Ok(TilePos::new(x, y))
 }

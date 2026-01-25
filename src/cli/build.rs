@@ -6,6 +6,7 @@ use clap::{Args, Subcommand};
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::{Output, OutputFormat};
+use crate::world::{entity_size, TilePos};
 
 #[derive(Args, Debug)]
 pub struct BuildCommand {
@@ -25,7 +26,7 @@ pub enum BuildSubcommand {
         #[arg(long)]
         resource: String,
 
-        /// Search near this position (x,y)
+        /// Search near this tile position (x,y as integers)
         #[arg(long, allow_hyphen_values = true)]
         near: Option<String>,
 
@@ -44,7 +45,7 @@ pub enum BuildSubcommand {
         #[arg(long, default_value = "1")]
         count: u32,
 
-        /// Starting position (x,y)
+        /// Starting tile position (x,y as integers)
         #[arg(long, allow_hyphen_values = true)]
         at: String,
 
@@ -80,14 +81,11 @@ pub async fn execute(cmd: BuildCommand, conn: &ResolvedConnectionArgs) -> Result
             direction,
         } => {
             let near_pos = if let Some(pos_str) = near {
-                let parts: Vec<f64> = pos_str
-                    .split(',')
-                    .map(|p| p.trim().parse())
-                    .collect::<Result<_, _>>()?;
-                if parts.len() != 2 {
-                    anyhow::bail!("Position must be x,y");
-                }
-                Some((parts[0], parts[1]))
+                let tile = parse_tile(&pos_str)?;
+                // Drills are 2x2, convert to world position
+                let (w, h) = entity_size(&drill_type);
+                let world_pos = tile.to_world(w, h);
+                Some((world_pos.x, world_pos.y))
             } else {
                 None
             };
@@ -121,16 +119,13 @@ pub async fn execute(cmd: BuildCommand, conn: &ResolvedConnectionArgs) -> Result
             direction,
             spacing,
         } => {
-            let parts: Vec<f64> = at
-                .split(',')
-                .map(|p| p.trim().parse())
-                .collect::<Result<_, _>>()?;
-            if parts.len() != 2 {
-                anyhow::bail!("Position must be x,y");
-            }
+            let tile = parse_tile(&at)?;
+            // Furnaces are 2x2, convert to world position
+            let (w, h) = entity_size(&furnace_type);
+            let world_pos = tile.to_world(w, h);
 
             let result = client
-                .build_smelter_line(count, (parts[0], parts[1]), &furnace_type, &direction, spacing)
+                .build_smelter_line(count, (world_pos.x, world_pos.y), &furnace_type, &direction, spacing)
                 .await?;
 
             if conn.output == OutputFormat::Json {
@@ -163,4 +158,23 @@ pub async fn execute(cmd: BuildCommand, conn: &ResolvedConnectionArgs) -> Result
 
     client.close().await?;
     Ok(())
+}
+
+/// Parse integer tile coordinates (x,y)
+fn parse_tile(s: &str) -> Result<TilePos> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Position must be x,y (integers)");
+    }
+
+    let x: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
+    let y: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+
+    Ok(TilePos::new(x, y))
 }

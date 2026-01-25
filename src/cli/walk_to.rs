@@ -5,11 +5,11 @@ use clap::Args;
 
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::Position;
+use crate::world::TilePos;
 
 #[derive(Args, Debug)]
 pub struct WalkToCommand {
-    /// Target position (x,y)
+    /// Target tile position (x,y as integers)
     #[arg(allow_hyphen_values = true)]
     pub position: String,
 
@@ -27,18 +27,23 @@ pub struct WalkToCommand {
 }
 
 pub async fn execute(cmd: WalkToCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
-    let parts: Vec<f64> = cmd
-        .position
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
+    let parts: Vec<&str> = cmd.position.split(',').collect();
     if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
+        anyhow::bail!("Position must be x,y (integers)");
     }
-    let target = Position {
-        x: parts[0],
-        y: parts[1],
-    };
+
+    let x: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
+    let y: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+
+    let tile = TilePos::new(x, y);
+    // For walking, target the center of the tile (same as 1x1 entity)
+    let target = tile.to_world_1x1();
 
     let mut client = FactorioClient::connect(&conn.host, conn.port, &conn.password).await?;
 

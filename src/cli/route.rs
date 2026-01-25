@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::{find_belt_route, Area, GridPos, Position};
+use crate::world::{find_belt_route, Area, GridPos, Position, TilePos};
 
 #[derive(Args, Debug)]
 pub struct RouteCommand {
@@ -17,11 +17,11 @@ pub struct RouteCommand {
 pub enum RouteSubcommand {
     /// Route transport belts from point A to point B
     Belt {
-        /// Starting position (x,y)
+        /// Starting tile position (x,y as integers)
         #[arg(long, allow_hyphen_values = true)]
         from: String,
 
-        /// Ending position (x,y)
+        /// Ending tile position (x,y as integers)
         #[arg(long, allow_hyphen_values = true)]
         to: String,
 
@@ -55,28 +55,28 @@ pub async fn execute(cmd: RouteCommand, conn: &ResolvedConnectionArgs) -> Result
             dry_run,
             plan_only,
         } => {
-            let start = parse_position(&from)?;
-            let end = parse_position(&to)?;
+            let start_tile = parse_tile(&from)?;
+            let end_tile = parse_tile(&to)?;
 
             // Calculate search area (bounding box of path + radius padding)
-            let area = calculate_search_area(&start, &end, search_radius);
+            let area = calculate_search_area(&start_tile, &end_tile, search_radius);
 
             println!(
-                "Finding route from ({}, {}) to ({}, {})",
-                start.x, start.y, end.x, end.y
+                "Finding route from tile ({}, {}) to ({}, {})",
+                start_tile.x, start_tile.y, end_tile.x, end_tile.y
             );
             println!(
                 "Search area: ({}, {}) to ({}, {})",
-                area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y
+                area.left_top.x as i32, area.left_top.y as i32, area.right_bottom.x as i32, area.right_bottom.y as i32
             );
 
             // Build collision map
             let collision_map = client.build_collision_map(area).await?;
             println!("Collision map: {} blocked tiles", collision_map.blocked_count());
 
-            // Find path
-            let start_grid = GridPos::from_position(&start);
-            let end_grid = GridPos::from_position(&end);
+            // Find path using GridPos (integer coordinates)
+            let start_grid = GridPos::new(start_tile.x, start_tile.y);
+            let end_grid = GridPos::new(end_tile.x, end_tile.y);
             let result = find_belt_route(start_grid, end_grid, &collision_map);
 
             if plan_only {
@@ -152,30 +152,35 @@ pub async fn execute(cmd: RouteCommand, conn: &ResolvedConnectionArgs) -> Result
     Ok(())
 }
 
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
+/// Parse integer tile coordinates (x,y)
+fn parse_tile(s: &str) -> Result<TilePos> {
+    let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
+        anyhow::bail!("Position must be x,y (integers)");
     }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
+
+    let x: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
+    let y: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+
+    Ok(TilePos::new(x, y))
 }
 
-fn calculate_search_area(start: &Position, end: &Position, padding: u32) -> Area {
-    let padding = padding as f64;
+fn calculate_search_area(start: &TilePos, end: &TilePos, padding: u32) -> Area {
+    let padding = padding as i32;
     Area {
         left_top: Position {
-            x: start.x.min(end.x) - padding,
-            y: start.y.min(end.y) - padding,
+            x: (start.x.min(end.x) - padding) as f64,
+            y: (start.y.min(end.y) - padding) as f64,
         },
         right_bottom: Position {
-            x: start.x.max(end.x) + padding,
-            y: start.y.max(end.y) + padding,
+            x: (start.x.max(end.x) + padding + 1) as f64,
+            y: (start.y.max(end.y) + padding + 1) as f64,
         },
     }
 }

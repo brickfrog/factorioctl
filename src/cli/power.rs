@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::Position;
+use crate::world::{Position, TilePos};
 
 #[derive(Args, Debug)]
 pub struct PowerCommand {
@@ -17,11 +17,11 @@ pub struct PowerCommand {
 pub enum PowerSubcommand {
     /// Run a power line from one position to another
     Line {
-        /// Starting position (x,y)
+        /// Starting tile position (x,y as integers)
         #[arg(long, allow_hyphen_values = true)]
         from: String,
 
-        /// Ending position (x,y)
+        /// Ending tile position (x,y as integers)
         #[arg(long, allow_hyphen_values = true)]
         to: String,
 
@@ -32,7 +32,7 @@ pub enum PowerSubcommand {
 
     /// Show power network status at a position
     Status {
-        /// Position to check (x,y)
+        /// Tile position to check (x,y as integers)
         #[arg(allow_hyphen_values = true)]
         at: String,
     },
@@ -43,8 +43,11 @@ pub async fn execute(cmd: PowerCommand, conn: &ResolvedConnectionArgs) -> Result
 
     match cmd.command {
         PowerSubcommand::Line { from, to, pole } => {
-            let from_pos = parse_position(&from)?;
-            let to_pos = parse_position(&to)?;
+            let from_tile = parse_tile(&from)?;
+            let to_tile = parse_tile(&to)?;
+            // Poles are 1x1, use tile center
+            let from_pos = from_tile.to_world_1x1();
+            let to_pos = to_tile.to_world_1x1();
 
             // Get pole wire reach distance
             let spacing = get_pole_spacing(&pole);
@@ -129,7 +132,8 @@ pub async fn execute(cmd: PowerCommand, conn: &ResolvedConnectionArgs) -> Result
         }
 
         PowerSubcommand::Status { at } => {
-            let pos = parse_position(&at)?;
+            let tile = parse_tile(&at)?;
+            let pos = tile.to_world_1x1();
 
             let lua = format!(
                 r#"
@@ -163,18 +167,23 @@ end
     Ok(())
 }
 
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
+/// Parse integer tile coordinates (x,y)
+fn parse_tile(s: &str) -> Result<TilePos> {
+    let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
+        anyhow::bail!("Position must be x,y (integers)");
     }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
+
+    let x: i32 = parts[0]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
+    let y: i32 = parts[1]
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+
+    Ok(TilePos::new(x, y))
 }
 
 fn get_pole_spacing(pole_type: &str) -> f64 {
