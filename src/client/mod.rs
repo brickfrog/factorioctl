@@ -24,6 +24,8 @@ pub const PROXIMITY_RANGE_INTERACT: f64 = 5.0;
 /// High-level client for interacting with Factorio
 pub struct FactorioClient {
     rcon: RconClient,
+    /// Use /c instead of /silent-command (shows commands in console)
+    debug_commands: bool,
 }
 
 impl FactorioClient {
@@ -31,10 +33,15 @@ impl FactorioClient {
     pub async fn connect(host: &str, port: u16, password: &str) -> Result<Self> {
         let mut rcon = RconClient::connect(host, port, password).await?;
 
+        // Load config to check debug_commands setting
+        let debug_commands = crate::config::Config::load()
+            .map(|c| c.debug_commands)
+            .unwrap_or(false);
+
         // Send warmup command (first command after connection may get dropped)
         let _ = rcon.execute("/c").await;
 
-        Ok(Self { rcon })
+        Ok(Self { rcon, debug_commands })
     }
 
     /// Close the connection
@@ -42,7 +49,7 @@ impl FactorioClient {
         self.rcon.close().await
     }
 
-    /// Execute a raw Lua command
+    /// Execute a Lua command (silent by default, verbose if debug_commands is enabled)
     pub async fn execute_lua(&mut self, lua: &str) -> Result<String> {
         // RCON doesn't handle newlines well, convert to single line
         let single_line: String = lua
@@ -51,19 +58,20 @@ impl FactorioClient {
             .filter(|line| !line.is_empty() && !line.starts_with("--"))
             .collect::<Vec<_>>()
             .join(" ");
-        self.rcon.execute(&format!("/c {}", single_line)).await
+        let prefix = if self.debug_commands { "/c" } else { "/silent-command" };
+        self.rcon.execute(&format!("{} {}", prefix, single_line)).await
     }
 
-    /// Execute a silent Lua command (no console output)
-    pub async fn execute_lua_silent(&mut self, lua: &str) -> Result<String> {
-        // RCON doesn't handle newlines well, convert to single line
+    /// Execute a Lua command with explicit visibility control
+    pub async fn execute_lua_visible(&mut self, lua: &str, visible: bool) -> Result<String> {
         let single_line: String = lua
             .lines()
             .map(|line| line.trim())
             .filter(|line| !line.is_empty() && !line.starts_with("--"))
             .collect::<Vec<_>>()
             .join(" ");
-        self.rcon.execute(&format!("/silent-command {}", single_line)).await
+        let prefix = if visible { "/c" } else { "/silent-command" };
+        self.rcon.execute(&format!("{} {}", prefix, single_line)).await
     }
 
     // --- Game State Queries ---
@@ -429,7 +437,7 @@ rcon.print('{{"success": true, "mined": ' .. mined .. '}}')
             count, position.x, position.y, position.x, position.y
         );
 
-        let _ = self.execute_lua_silent(&mine_lua).await?;
+        let _ = self.execute_lua(&mine_lua).await?;
 
         // Get final inventory
         let inv_after = self.character_inventory().await?;
@@ -491,7 +499,7 @@ end
                 entity_type
             );
 
-            let response = self.execute_lua_silent(&find_lua).await?;
+            let response = self.execute_lua(&find_lua).await?;
             if response.trim() == "none" || response.trim() == "error" {
                 break;
             }
@@ -720,7 +728,7 @@ else
     rcon.print("error")
 end
 "#;
-        let response = self.execute_lua_silent(lua).await?;
+        let response = self.execute_lua(lua).await?;
         let parts: Vec<&str> = response.trim().split(',').collect();
         if parts.len() != 2 {
             anyhow::bail!("No character available");
@@ -837,7 +845,7 @@ end
 
             // Check if arrived (generous tolerance of 3 tiles)
             if dist < 3.0 {
-                self.execute_lua_silent(stop_lua).await?;
+                self.execute_lua(stop_lua).await?;
                 return Ok(WalkResult {
                     arrived: true,
                     final_position: pos,
@@ -850,7 +858,7 @@ end
             if i > 2 && dist > last_dist + 0.5 {
                 overshoot_count += 1;
                 if overshoot_count >= 2 {
-                    self.execute_lua_silent(stop_lua).await?;
+                    self.execute_lua(stop_lua).await?;
                     return Ok(WalkResult {
                         arrived: dist < 5.0, // Close enough
                         final_position: pos,
@@ -866,7 +874,7 @@ end
             if i > 3 && step_dist < 0.01 && dist > 3.0 {
                 stuck_count += 1;
                 if stuck_count >= 3 {
-                    self.execute_lua_silent(stop_lua).await?;
+                    self.execute_lua(stop_lua).await?;
                     return Ok(WalkResult {
                         arrived: false,
                         final_position: pos,
@@ -911,13 +919,13 @@ if not c then if not global then global = {{}} end c = global.factorioctl_charac
 if c then c.walking_state = {{walking=true, direction=defines.direction.{}}} end"#,
                 dir_name
             );
-            self.execute_lua_silent(&lua).await?;
+            self.execute_lua(&lua).await?;
 
             tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
         }
 
         // Timeout
-        self.execute_lua_silent(
+        self.execute_lua(
             "local c = nil for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end if not c then if not global then global = {} end c = global.factorioctl_character end if c then c.walking_state = {walking=false} end"
         ).await?;
         let pos = self.get_character_position().await?;
@@ -975,7 +983,7 @@ end
                 resource_name, radius
             );
 
-            let response = self.execute_lua_silent(&find_lua).await?;
+            let response = self.execute_lua(&find_lua).await?;
             if response.trim() == "none" || response.trim() == "error" {
                 break;
             }
@@ -1019,7 +1027,7 @@ end
 "#,
                 target_pos.x, target_pos.y
             );
-            let mine_result = self.execute_lua_silent(&mine_lua).await?;
+            let mine_result = self.execute_lua(&mine_lua).await?;
 
             match mine_result.trim() {
                 "mined" => gathered += 1,
@@ -1047,7 +1055,7 @@ else
     rcon.print(helpers.table_to_json({ items = items }))
 end
 "#;
-        let inv_response = self.execute_lua_silent(inv_lua).await?;
+        let inv_response = self.execute_lua(inv_lua).await?;
         #[derive(serde::Deserialize)]
         struct InvResult {
             items: Vec<crate::world::InventoryItem>,
@@ -1177,7 +1185,7 @@ rcon.print(helpers.table_to_json({{
             direction = dir.to_factorio()
         );
 
-        let response = self.execute_lua_silent(&lua).await?;
+        let response = self.execute_lua(&lua).await?;
         let result: BuildResult = serde_json::from_str(&response)?;
         Ok(result)
     }
@@ -1269,7 +1277,7 @@ rcon.print(helpers.table_to_json({{
             dy = dy
         );
 
-        let response = self.execute_lua_silent(&lua).await?;
+        let response = self.execute_lua(&lua).await?;
         let result: BuildResult = serde_json::from_str(&response)?;
         Ok(result)
     }

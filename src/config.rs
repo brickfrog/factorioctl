@@ -15,6 +15,9 @@ pub struct Config {
     pub port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+    /// Show all Lua commands in game console (default: false, uses /silent-command)
+    #[serde(default)]
+    pub debug_commands: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub broadcast: Option<BroadcastConfig>,
 }
