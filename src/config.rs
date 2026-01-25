@@ -113,7 +113,7 @@ impl Default for TtsConfig {
         Self {
             enabled: false,
             backend: "say".to_string(),
-            voice: None,
+            voice: Some("Samantha".to_string()),
             openai_api_key: None,
             rate: None,
         }

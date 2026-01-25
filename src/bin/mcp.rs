@@ -674,7 +674,7 @@ impl FactorioMcp {
                     r#"local p = game.players[1] if p and p.connected and p.character and p.character.valid then \
                     p.create_local_flying_text{{text="{}", \
                     position={{p.character.position.x, p.character.position.y - 2}}, \
-                    color={{r=0.8,g=0.8,b=1}}}} end"#,
+                    color={{r=0.8,g=0.8,b=1}}, speed=0.3, time_to_live=300}} end"#,
                     escaped
                 );
                 if let Err(e) = client.execute_lua(&lua).await {

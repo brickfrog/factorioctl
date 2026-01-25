@@ -72,7 +72,9 @@ if player and player.connected and player.character and player.character.valid t
     player.create_local_flying_text{{
         text = "{}",
         position = {{ player.character.position.x, player.character.position.y - 2 }},
-        color = {{ r = 0.8, g = 0.8, b = 1.0 }}
+        color = {{ r = 0.8, g = 0.8, b = 1.0 }},
+        speed = 0.3,
+        time_to_live = 300
     }}
 end
 "#,
