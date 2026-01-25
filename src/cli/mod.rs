@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 pub mod blueprint;
 pub mod build;
 pub mod character;
+pub mod clipboard;
 pub mod config;
 pub mod craft;
 pub mod exec;
@@ -92,6 +93,15 @@ pub enum Commands {
 
     /// Configure connection settings
     Config(config::ConfigCommand),
+
+    /// Copy entities from an area to clipboard
+    Copy(clipboard::CopyCommand),
+
+    /// Paste entities from clipboard to a location
+    Paste(clipboard::PasteCommand),
+
+    /// Manage clipboard
+    Clipboard(clipboard::ClipboardCommand),
 
     /// Server management commands
     Server(server::ServerCommand),

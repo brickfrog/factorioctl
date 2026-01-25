@@ -391,6 +391,27 @@ end
         Ok(entity)
     }
 
+    /// Place a ghost entity (for planning, doesn't require items)
+    pub async fn place_ghost(
+        &mut self,
+        entity_name: &str,
+        position: Position,
+        direction: Direction,
+    ) -> Result<Entity> {
+        let lua = LuaCommand::place_ghost(entity_name, position, direction);
+        let response = self.execute_lua(&lua).await?;
+        if response.contains("\"error\"") {
+            #[derive(serde::Deserialize)]
+            struct ErrorResponse {
+                error: String,
+            }
+            let err: ErrorResponse = serde_json::from_str(&response)?;
+            anyhow::bail!("{}", err.error);
+        }
+        let entity: Entity = serde_json::from_str(&response)?;
+        Ok(entity)
+    }
+
     /// Remove entity at position
     pub async fn remove_entity_at(&mut self, position: Position) -> Result<()> {
         let lua = LuaCommand::remove_entity_at(position);

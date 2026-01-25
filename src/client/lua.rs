@@ -838,6 +838,51 @@ end
         .to_string()
     }
 
+    /// Place a ghost entity (for planning)
+    pub fn place_ghost(entity_name: &str, position: Position, direction: Direction) -> String {
+        format!(
+            r#"
+local c = nil
+for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end
+if not c then if not global then global = {{}} end c = global.factorioctl_character end
+if not (c and c.valid) then
+    rcon.print('{{"error": "No character"}}')
+    return
+end
+
+-- Create ghost entity (doesn't require items in inventory)
+local e = game.surfaces[1].create_entity{{
+    name = "entity-ghost",
+    inner_name = "{}",
+    position = {{ {}, {} }},
+    direction = {},
+    force = c.force
+}}
+
+if e then
+    rcon.print(helpers.table_to_json({{
+        unit_number = e.unit_number,
+        name = e.ghost_name or "{}",
+        entity_type = "entity-ghost",
+        position = {{ x = e.position.x, y = e.position.y }},
+        direction = e.direction,
+        health = e.health,
+        force = e.force.name
+    }}))
+else
+    rcon.print('{{"error": "Failed to create ghost"}}')
+end
+"#,
+            entity_name,
+            position.x,
+            position.y,
+            direction.to_factorio(),
+            entity_name
+        )
+        .trim()
+        .to_string()
+    }
+
     /// Remove entity at position
     pub fn remove_entity_at(position: Position) -> String {
         format!(
