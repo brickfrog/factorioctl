@@ -15,7 +15,9 @@ pub mod insert;
 pub mod map;
 pub mod mine;
 pub mod place;
+pub mod power;
 pub mod remove;
+pub mod research;
 pub mod route;
 pub mod server;
 pub mod set_recipe;
@@ -151,4 +153,10 @@ pub enum Commands {
 
     /// Route entities (pathfinding for belts)
     Route(route::RouteCommand),
+
+    /// Research/technology commands
+    Research(research::ResearchCommand),
+
+    /// Power infrastructure commands
+    Power(power::PowerCommand),
 }

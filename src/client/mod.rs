@@ -14,6 +14,13 @@ use crate::world::{
 use lua::LuaCommand;
 use rcon::RconClient;
 
+/// Maximum distance for placing entities
+pub const PROXIMITY_RANGE_PLACE: f64 = 10.0;
+/// Maximum distance for inserting items
+pub const PROXIMITY_RANGE_INSERT: f64 = 5.0;
+/// Maximum distance for setting recipes
+pub const PROXIMITY_RANGE_INTERACT: f64 = 5.0;
+
 /// High-level client for interacting with Factorio
 pub struct FactorioClient {
     rcon: RconClient,
@@ -657,6 +664,38 @@ end
         }
 
         Ok(())
+    }
+
+    // --- Proximity Checks ---
+
+    /// Check if player is within range of a position, return error if not
+    pub async fn ensure_proximity_to_position(
+        &mut self,
+        target: Position,
+        max_distance: f64,
+    ) -> Result<()> {
+        let char_pos = self.get_character_position().await?;
+        let distance = char_pos.distance(&target);
+        if distance > max_distance {
+            anyhow::bail!(
+                "Player is {:.1} tiles away from target (max: {:.0}). Use 'walk-to {:.0},{:.0}' first.",
+                distance,
+                max_distance,
+                target.x,
+                target.y
+            );
+        }
+        Ok(())
+    }
+
+    /// Check if player is within range of an entity, return error if not
+    pub async fn ensure_proximity_to_entity(
+        &mut self,
+        unit_number: u32,
+        max_distance: f64,
+    ) -> Result<()> {
+        let entity = self.get_entity(unit_number).await?;
+        self.ensure_proximity_to_position(entity.position, max_distance).await
     }
 
     // --- High-Level Operations ---

@@ -43,5 +43,7 @@ async fn main() -> Result<()> {
         Commands::Exec(cmd) => cli::exec::execute(cmd, &conn).await,
         Commands::Map(cmd) => cli::map::execute(cmd, &conn).await,
         Commands::Route(cmd) => cli::route::execute(cmd, &conn).await,
+        Commands::Research(cmd) => cli::research::execute(cmd, &conn).await,
+        Commands::Power(cmd) => cli::power::execute(cmd, &conn).await,
     }
 }

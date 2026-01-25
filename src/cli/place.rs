@@ -28,6 +28,11 @@ pub async fn execute(cmd: PlaceCommand, conn: &ResolvedConnectionArgs) -> Result
     let pos = parse_position(&cmd.at)?;
     let dir = parse_direction(&cmd.direction)?;
 
+    // Check proximity before placing
+    client
+        .ensure_proximity_to_position(pos, crate::client::PROXIMITY_RANGE_PLACE)
+        .await?;
+
     let entity = client.place_entity(&cmd.entity_name, pos, dir).await?;
     Output::new(conn.output).print(&entity)?;
 
