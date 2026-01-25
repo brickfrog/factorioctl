@@ -1774,7 +1774,7 @@ for name, tech in pairs(force.technologies) do
             end
 
             local effects = {}
-            for _, eff in pairs(tech.effects) do
+            for _, eff in pairs(tech.prototype.effects) do
                 if eff.type == "unlock-recipe" then
                     table.insert(effects, {
                         type = "unlock-recipe",

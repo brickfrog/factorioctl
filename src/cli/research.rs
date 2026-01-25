@@ -180,8 +180,6 @@ end
         }
 
         ResearchSubcommand::Start { tech } => {
-            // In Factorio 2.0, we directly complete research (for headless/dev use)
-            // Normal gameplay would use labs with science packs
             let response = client
                 .execute_lua(&format!(
                     r#"
@@ -191,9 +189,23 @@ if not tech then
     rcon.print('{{"success": false, "error": "Technology not found"}}')
 elseif tech.researched then
     rcon.print('{{"success": false, "error": "Already researched"}}')
+elseif not tech.enabled then
+    rcon.print('{{"success": false, "error": "Technology not enabled"}}')
 else
-    tech.researched = true
-    rcon.print('{{"success": true}}')
+    -- Check prerequisites
+    for _, prereq in pairs(tech.prerequisites) do
+        if not prereq.researched then
+            rcon.print('{{"success": false, "error": "Prerequisites not met: ' .. prereq.name .. '"}}')
+            return
+        end
+    end
+    -- Queue research properly (requires labs with science packs)
+    local added = force.add_research(tech)
+    if added then
+        rcon.print('{{"success": true, "queued": true}}')
+    else
+        rcon.print('{{"success": false, "error": "Failed to queue research"}}')
+    end
 end
 "#,
                     tech
@@ -203,12 +215,13 @@ end
             #[derive(serde::Deserialize)]
             struct Result {
                 success: bool,
+                queued: Option<bool>,
                 error: Option<String>,
             }
             let result: Result = serde_json::from_str(&response)?;
 
             if result.success {
-                println!("Researched: {}", tech);
+                println!("Queued research: {}", tech);
             } else {
                 println!(
                     "Failed: {}",
