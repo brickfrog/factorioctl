@@ -18,7 +18,7 @@ use factorioctl::analyze::{
     trace_belt_sources, BeltGraph,
 };
 use factorioctl::client::FactorioClient;
-use factorioctl::memory::{AgentMemory, ProtectedResource, Zone, ZoneType};
+use factorioctl::memory::{AgentMemory, BeltRouting, ProtectedResource, Zone, ZoneType};
 use factorioctl::world::{find_belt_route, Area, Direction, GridPos, Position, TilePos};
 
 /// Connection configuration loaded from environment or config
@@ -223,6 +223,11 @@ pub struct RouteBeltParams {
     /// If true, only plan the route without placing belts
     #[serde(default)]
     pub dry_run: bool,
+    /// Respect zone boundaries when routing (default: false).
+    /// When true, routes around Assembly/Smelting/Power/Storage/Reserved zones
+    /// and prefers Logistics zones for belt highways.
+    #[serde(default)]
+    pub respect_zones: bool,
 }
 
 fn default_belt_type() -> String { "transport-belt".to_string() }
@@ -916,10 +921,22 @@ impl FactorioMcp {
         };
 
         // Build collision map
-        let collision_map = match client.build_collision_map(area).await {
+        let mut collision_map = match client.build_collision_map(area).await {
             Ok(cm) => cm,
             Err(e) => return self.with_player_messages(format!("Error building collision map: {}", e)).await,
         };
+
+        // Apply zone constraints if respect_zones is enabled
+        if params.respect_zones {
+            let memory = AgentMemory::load();
+            for zone in memory.zones.values() {
+                match zone.zone_type.belt_routing() {
+                    BeltRouting::Blocked => collision_map.block_area(&zone.bounds),
+                    BeltRouting::Preferred => collision_map.prefer_area(&zone.bounds),
+                    BeltRouting::Allowed => {} // No change to collision map
+                }
+            }
+        }
 
         // Find path
         let start = GridPos::new(params.from_x, params.from_y);

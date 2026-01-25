@@ -12,6 +12,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::world::{Area, Position};
 
+/// Belt routing behavior for a zone type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeltRouting {
+    /// Cannot route belts through this zone
+    Blocked,
+    /// Normal routing cost (1.0)
+    Allowed,
+    /// Lower routing cost (0.5) - preferred for belt highways
+    Preferred,
+}
+
 /// Type of zone, defining what entities are appropriate there
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -173,6 +184,20 @@ impl ZoneType {
                         || a.contains(entity_name)
                 })
             }
+        }
+    }
+
+    /// Get belt routing behavior for this zone type
+    pub fn belt_routing(&self) -> BeltRouting {
+        match self {
+            ZoneType::Mining => BeltRouting::Allowed,      // Belts extract ore from mining
+            ZoneType::Logistics => BeltRouting::Preferred, // Belt highways - lower cost
+            ZoneType::Smelting
+            | ZoneType::Assembly
+            | ZoneType::Power
+            | ZoneType::Storage
+            | ZoneType::Reserved
+            | ZoneType::Custom(_) => BeltRouting::Blocked, // Factory areas - route around
         }
     }
 }
@@ -574,5 +599,25 @@ mod tests {
         let check = memory.check_placement("assembling-machine-1", &Position::new(25.0, 25.0));
         assert!(!check.allowed);
         assert!(!check.errors.is_empty());
+    }
+
+    #[test]
+    fn test_belt_routing() {
+        // Mining allows belts (to extract ore)
+        assert_eq!(ZoneType::Mining.belt_routing(), BeltRouting::Allowed);
+
+        // Logistics is preferred (belt highways)
+        assert_eq!(ZoneType::Logistics.belt_routing(), BeltRouting::Preferred);
+
+        // Factory areas block belt routing
+        assert_eq!(ZoneType::Smelting.belt_routing(), BeltRouting::Blocked);
+        assert_eq!(ZoneType::Assembly.belt_routing(), BeltRouting::Blocked);
+        assert_eq!(ZoneType::Power.belt_routing(), BeltRouting::Blocked);
+        assert_eq!(ZoneType::Storage.belt_routing(), BeltRouting::Blocked);
+        assert_eq!(ZoneType::Reserved.belt_routing(), BeltRouting::Blocked);
+        assert_eq!(
+            ZoneType::Custom("test".into()).belt_routing(),
+            BeltRouting::Blocked
+        );
     }
 }

@@ -99,3 +99,26 @@ Whenever there might be silence, fill it with:
 5. Check placements: check_placement before building
 6. Build: Place entities within appropriate zones
 ```
+
+### Belt Routing with Zones
+
+Use `route_belt` with `respect_zones=true` to route belts around factory areas:
+
+| Zone Type | Routing Behavior |
+|-----------|-----------------|
+| mining | Allowed (belts extract ore) |
+| logistics | **Preferred** (lower cost - belt highways) |
+| smelting, assembly, power, storage, reserved | Blocked (route around) |
+
+**Workflow:**
+1. Create zones for factory areas (smelting, assembly, etc.)
+2. Create Logistics zones for belt highways between areas
+3. Use `route_belt` with `respect_zones=true` to connect areas - belts will prefer logistics corridors and avoid factory zones
+
+**Example:**
+```
+1. create_zone id="smelting-1" zone_type="smelting" ...
+2. create_zone id="main-bus" zone_type="logistics" ...
+3. route_belt from_x=0 from_y=15 to_x=50 to_y=15 respect_zones=true
+   -> Routes through main-bus corridor, avoids smelting area
+```

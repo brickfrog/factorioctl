@@ -55,6 +55,8 @@ impl GridPos {
 pub struct CollisionMap {
     /// Blocked tiles (positions that cannot be traversed)
     blocked: HashSet<GridPos>,
+    /// Preferred tiles (lower movement cost)
+    preferred: HashSet<GridPos>,
     /// Bounding box of the search area
     bounds: Area,
 }
@@ -64,6 +66,7 @@ impl CollisionMap {
     pub fn new(bounds: Area) -> Self {
         Self {
             blocked: HashSet::new(),
+            preferred: HashSet::new(),
             bounds,
         }
     }
@@ -73,9 +76,41 @@ impl CollisionMap {
         self.blocked.insert(pos);
     }
 
+    /// Mark a position as preferred (lower routing cost)
+    pub fn prefer(&mut self, pos: GridPos) {
+        self.preferred.insert(pos);
+    }
+
+    /// Block all tiles within an area
+    pub fn block_area(&mut self, area: &Area) {
+        for x in area.left_top.x.floor() as i32..area.right_bottom.x.ceil() as i32 {
+            for y in area.left_top.y.floor() as i32..area.right_bottom.y.ceil() as i32 {
+                self.block(GridPos::new(x, y));
+            }
+        }
+    }
+
+    /// Mark all tiles within an area as preferred (lower routing cost)
+    pub fn prefer_area(&mut self, area: &Area) {
+        for x in area.left_top.x.floor() as i32..area.right_bottom.x.ceil() as i32 {
+            for y in area.left_top.y.floor() as i32..area.right_bottom.y.ceil() as i32 {
+                self.prefer(GridPos::new(x, y));
+            }
+        }
+    }
+
     /// Check if a position is walkable (not blocked and within bounds)
     pub fn is_walkable(&self, pos: &GridPos) -> bool {
         !self.blocked.contains(pos) && self.bounds.contains(&pos.to_position())
+    }
+
+    /// Get movement cost for a tile (0.5 for preferred, 1.0 for normal)
+    pub fn tile_cost(&self, pos: &GridPos) -> f64 {
+        if self.preferred.contains(pos) {
+            0.5
+        } else {
+            1.0
+        }
     }
 
     /// Get the number of blocked tiles
@@ -225,10 +260,11 @@ pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionM
                 continue;
             }
 
-            // Calculate movement cost (with turn penalty)
+            // Calculate movement cost (with turn penalty and tile cost)
             let is_turn = current.pos != start && arrival_direction != move_direction;
             let turn_cost = if is_turn { 0.1 } else { 0.0 };
-            let tentative_g = current.g_cost + 1.0 + turn_cost;
+            let tile_cost = collision_map.tile_cost(&neighbor);
+            let tentative_g = current.g_cost + tile_cost + turn_cost;
 
             let current_g = g_score.get(&neighbor).copied().unwrap_or(f64::INFINITY);
             if tentative_g < current_g {
@@ -517,5 +553,102 @@ mod tests {
         assert_eq!(direction_from_delta(1, 0), Direction::East);
         assert_eq!(direction_from_delta(0, 1), Direction::South);
         assert_eq!(direction_from_delta(-1, 0), Direction::West);
+    }
+
+    #[test]
+    fn test_tile_cost() {
+        let bounds = Area {
+            left_top: Position { x: -10.0, y: -10.0 },
+            right_bottom: Position { x: 10.0, y: 10.0 },
+        };
+        let mut collision_map = CollisionMap::new(bounds);
+
+        // Normal tile should have cost 1.0
+        assert_eq!(collision_map.tile_cost(&GridPos::new(0, 0)), 1.0);
+
+        // Preferred tile should have cost 0.5
+        collision_map.prefer(GridPos::new(1, 1));
+        assert_eq!(collision_map.tile_cost(&GridPos::new(1, 1)), 0.5);
+
+        // Non-preferred tile still has cost 1.0
+        assert_eq!(collision_map.tile_cost(&GridPos::new(2, 2)), 1.0);
+    }
+
+    #[test]
+    fn test_block_area() {
+        let bounds = Area {
+            left_top: Position { x: -10.0, y: -10.0 },
+            right_bottom: Position { x: 10.0, y: 10.0 },
+        };
+        let mut collision_map = CollisionMap::new(bounds);
+
+        // Block an area
+        let blocked_area = Area {
+            left_top: Position { x: 2.0, y: 2.0 },
+            right_bottom: Position { x: 5.0, y: 5.0 },
+        };
+        collision_map.block_area(&blocked_area);
+
+        // Tiles inside the area should be blocked
+        assert!(!collision_map.is_walkable(&GridPos::new(2, 2)));
+        assert!(!collision_map.is_walkable(&GridPos::new(3, 3)));
+        assert!(!collision_map.is_walkable(&GridPos::new(4, 4)));
+
+        // Tiles outside the area should be walkable
+        assert!(collision_map.is_walkable(&GridPos::new(0, 0)));
+        assert!(collision_map.is_walkable(&GridPos::new(5, 5)));
+        assert!(collision_map.is_walkable(&GridPos::new(6, 6)));
+    }
+
+    #[test]
+    fn test_prefer_area() {
+        let bounds = Area {
+            left_top: Position { x: -10.0, y: -10.0 },
+            right_bottom: Position { x: 10.0, y: 10.0 },
+        };
+        let mut collision_map = CollisionMap::new(bounds);
+
+        // Mark an area as preferred
+        let preferred_area = Area {
+            left_top: Position { x: 2.0, y: 2.0 },
+            right_bottom: Position { x: 5.0, y: 5.0 },
+        };
+        collision_map.prefer_area(&preferred_area);
+
+        // Tiles inside the preferred area should have lower cost
+        assert_eq!(collision_map.tile_cost(&GridPos::new(2, 2)), 0.5);
+        assert_eq!(collision_map.tile_cost(&GridPos::new(3, 3)), 0.5);
+        assert_eq!(collision_map.tile_cost(&GridPos::new(4, 4)), 0.5);
+
+        // Tiles outside the preferred area should have normal cost
+        assert_eq!(collision_map.tile_cost(&GridPos::new(0, 0)), 1.0);
+        assert_eq!(collision_map.tile_cost(&GridPos::new(5, 5)), 1.0);
+    }
+
+    #[test]
+    fn test_path_prefers_preferred_tiles() {
+        // Create a map where going through preferred tiles is better
+        // even if it means a slightly longer path
+        let bounds = Area {
+            left_top: Position { x: -5.0, y: -5.0 },
+            right_bottom: Position { x: 15.0, y: 15.0 },
+        };
+        let mut collision_map = CollisionMap::new(bounds);
+
+        // Create a "corridor" of preferred tiles that goes south then east
+        // Path from (0,0) to (10,0):
+        // - Direct path: 10 tiles east (cost = 10.0)
+        // - Preferred path: 2 south + 10 east + 2 north through preferred = (2 + 10 + 2) * 0.5 = 7.0
+        // But turn costs would add up, so let's simplify
+
+        // Prefer a horizontal strip at y=2
+        for x in 0..=10 {
+            collision_map.prefer(GridPos::new(x, 2));
+        }
+
+        let result = find_belt_route(GridPos::new(0, 2), GridPos::new(10, 2), &collision_map);
+        assert!(result.success);
+        // Path along preferred tiles should be found
+        assert_eq!(result.belt_count, 11); // 0,2 to 10,2 = 11 tiles
     }
 }
