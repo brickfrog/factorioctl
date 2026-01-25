@@ -18,6 +18,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "test-map-gen.json"
 SAVES_DIR = PROJECT_ROOT / "saves"
 
+# Use separate data directory so map creation doesn't conflict with Steam client
+SERVER_DATA_DIR = PROJECT_ROOT / ".factorio-server"
+
 # Factorio binary location (macOS Steam installation)
 FACTORIO_BINARY = Path.home() / "Library/Application Support/Steam/steamapps/common/Factorio/factorio.app/Contents/MacOS/factorio"
 
@@ -52,13 +55,18 @@ def create_map(name: str, config_path: Path | None = None) -> Path:
     # Ensure saves directory exists
     SAVES_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Ensure server data directory exists (for separate config to avoid lock conflicts)
+    SERVER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
     # Remove existing save if present
     if save_path.exists():
         print(f"Removing existing save: {save_path}")
         save_path.unlink()
 
+    # Use --config to specify separate data directory (avoids lock conflict with Steam client)
     cmd = [
         get_factorio_binary(),
+        "--config", str(SERVER_DATA_DIR / "config.ini"),
         "--create", str(save_path),
         "--map-gen-settings", str(config),
     ]
