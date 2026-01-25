@@ -193,6 +193,15 @@ pub struct ExtractItemsParams {
     pub inventory_type: String,
 }
 
+/// Parameters for set_recipe tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SetRecipeParams {
+    /// Target entity unit number (assembling machine, chemical plant, etc.)
+    pub unit_number: u32,
+    /// Recipe name to set (e.g., 'iron-gear-wheel', 'electronic-circuit'). Use empty string to clear recipe.
+    pub recipe: String,
+}
+
 /// Parameters for route_belt tool - routes belts from A to B using pathfinding
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RouteBeltParams {
@@ -694,6 +703,28 @@ impl FactorioMcp {
         let result = match client.extract_items(params.unit_number, &params.item, params.count, &params.inventory_type).await {
             Ok(extracted) => format!("Extracted {} {} from entity", extracted, params.item),
             Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Set recipe on a crafting machine.
+    #[tool(description = "Set or clear the recipe on an assembling machine, chemical plant, or other crafting entity. Use empty string to clear the recipe.")]
+    async fn set_recipe(&self, Parameters(params): Parameters<SetRecipeParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let result = if params.recipe.is_empty() {
+            match client.set_recipe(params.unit_number, "").await {
+                Ok(()) => "Recipe cleared".to_string(),
+                Err(e) => format!("Error: {}", e),
+            }
+        } else {
+            match client.set_recipe(params.unit_number, &params.recipe).await {
+                Ok(()) => format!("Recipe set to '{}'", params.recipe),
+                Err(e) => format!("Error: {}", e),
+            }
         };
         self.with_player_messages(result).await
     }

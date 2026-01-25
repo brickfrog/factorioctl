@@ -1051,6 +1051,8 @@ end
             "chest" => "defines.inventory.chest",
             "furnace_source" => "defines.inventory.furnace_source",
             "furnace_result" => "defines.inventory.furnace_result",
+            "lab_input" => "defines.inventory.lab_input",
+            "lab_modules" => "defines.inventory.lab_modules",
             _ => "defines.inventory.fuel",
         };
 
@@ -1093,6 +1095,8 @@ rcon.print(helpers.table_to_json({{ inserted = inserted }}))
             "chest" => "defines.inventory.chest",
             "furnace_source" => "defines.inventory.furnace_source",
             "furnace_result" => "defines.inventory.furnace_result",
+            "lab_input" => "defines.inventory.lab_input",
+            "lab_modules" => "defines.inventory.lab_modules",
             _ => "defines.inventory.chest",
         };
 
