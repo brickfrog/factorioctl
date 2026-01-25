@@ -45,3 +45,20 @@ pub struct PlacementSpec {
     #[serde(default)]
     pub direction: Option<String>,
 }
+
+/// Summary of items on a single belt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeltItemSummary {
+    pub position: Position,
+    pub unit_number: u32,
+    pub items: Vec<InventoryItem>,
+}
+
+/// Result of querying belt contents
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeltContentsResult {
+    pub belt_count: u32,
+    pub total_items: u32,
+    pub item_summary: Vec<InventoryItem>,
+    pub belts: Vec<BeltItemSummary>,
+}

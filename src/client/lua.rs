@@ -787,17 +787,43 @@ if not inv or inv.get_item_count("{}") < 1 then
     return
 end
 
--- Check if can place
+-- Check if can place (use manual build check for proper collision detection)
 local can_place = game.surfaces[1].can_place_entity{{
     name = "{}",
     position = {{ {}, {} }},
     direction = {},
-    force = c.force
+    force = c.force,
+    build_check_type = defines.build_check_type.manual
 }}
 
 if not can_place then
     rcon.print('{{"error": "Cannot place entity here"}}')
     return
+end
+
+-- Double-check for overlapping entities (can_place_entity may miss some cases)
+local proto = game.entity_prototypes["{}"]
+if proto and proto.collision_box then
+    local cb = proto.collision_box
+    local check_area = {{
+        {{ {} + cb.left_top.x, {} + cb.left_top.y }},
+        {{ {} + cb.right_bottom.x, {} + cb.right_bottom.y }}
+    }}
+    local overlapping = game.surfaces[1].find_entities_filtered{{
+        area = check_area,
+        collision_mask = proto.collision_mask
+    }}
+    -- Filter out resources (can build on ore) and the character
+    local blocking = {{}}
+    for _, ent in pairs(overlapping) do
+        if ent.type ~= "resource" and ent.type ~= "character" and ent.type ~= "item-entity" then
+            table.insert(blocking, ent.name)
+        end
+    end
+    if #blocking > 0 then
+        rcon.print('{{"error": "Position blocked by: ' .. table.concat(blocking, ", ") .. '"}}')
+        return
+    end
 end
 
 -- Create the entity
@@ -823,16 +849,21 @@ else
     rcon.print('{{"error": "Failed to create entity"}}')
 end
 "#,
-            entity_name,
-            entity_name,
-            position.x,
-            position.y,
-            direction.to_factorio(),
-            entity_name,
-            position.x,
-            position.y,
-            direction.to_factorio(),
-            entity_name
+            entity_name,       // inventory check
+            entity_name,       // can_place_entity name
+            position.x,        // can_place_entity position x
+            position.y,        // can_place_entity position y
+            direction.to_factorio(), // can_place_entity direction
+            entity_name,       // proto lookup
+            position.x,        // check_area left_top x
+            position.y,        // check_area left_top y
+            position.x,        // check_area right_bottom x
+            position.y,        // check_area right_bottom y
+            entity_name,       // create_entity name
+            position.x,        // create_entity position x
+            position.y,        // create_entity position y
+            direction.to_factorio(), // create_entity direction
+            entity_name        // inv.remove
         )
         .trim()
         .to_string()

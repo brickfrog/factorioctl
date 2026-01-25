@@ -34,6 +34,10 @@ pub enum BeltSubcommand {
         #[arg(long, default_value = "10")]
         search_radius: u32,
 
+        /// Leave N tiles gap at the end for inserters (0 = no gap)
+        #[arg(long, default_value = "0")]
+        inserter_gap: u32,
+
         /// Dry run - show planned route without placing
         #[arg(long)]
         dry_run: bool,
@@ -53,6 +57,10 @@ pub enum BeltSubcommand {
         #[arg(long, default_value = "10")]
         search_radius: u32,
 
+        /// Leave N tiles gap at the end for inserters (0 = no gap)
+        #[arg(long, default_value = "0")]
+        inserter_gap: u32,
+
         /// Dry run - show planned route without placing
         #[arg(long)]
         dry_run: bool,
@@ -68,6 +76,7 @@ pub async fn execute(cmd: BeltCommand, conn: &ResolvedConnectionArgs) -> Result<
             to,
             belt,
             search_radius,
+            inserter_gap,
             dry_run,
         } => {
             let from_tile = parse_tile(&from)?;
@@ -76,14 +85,23 @@ pub async fn execute(cmd: BeltCommand, conn: &ResolvedConnectionArgs) -> Result<
             let from_pos = from_tile.to_world_1x1();
             let to_pos = to_tile.to_world_1x1();
 
-            run_belt_line_astar(&mut client, from_pos, to_pos, &belt, search_radius, dry_run)
-                .await?;
+            run_belt_line_astar(
+                &mut client,
+                from_pos,
+                to_pos,
+                &belt,
+                search_radius,
+                inserter_gap,
+                dry_run,
+            )
+            .await?;
         }
 
         BeltSubcommand::Route {
             waypoints,
             belt,
             search_radius,
+            inserter_gap,
             dry_run,
         } => {
             let points: Vec<Position> = waypoints
@@ -96,12 +114,15 @@ pub async fn execute(cmd: BeltCommand, conn: &ResolvedConnectionArgs) -> Result<
             }
 
             for i in 0..points.len() - 1 {
+                // Only apply inserter_gap on the last segment
+                let gap = if i == points.len() - 2 { inserter_gap } else { 0 };
                 run_belt_line_astar(
                     &mut client,
                     points[i],
                     points[i + 1],
                     &belt,
                     search_radius,
+                    gap,
                     dry_run,
                 )
                 .await?;
@@ -120,6 +141,7 @@ async fn run_belt_line_astar(
     to: Position,
     belt_type: &str,
     search_radius: u32,
+    inserter_gap: u32,
     dry_run: bool,
 ) -> Result<()> {
     // Calculate search area (bounding box of path + radius padding)
@@ -166,9 +188,21 @@ async fn run_belt_line_astar(
         result.belt_count, result.turn_count
     );
 
+    // Apply inserter gap by removing the last N belts from the plan
+    let belts_to_place = if inserter_gap > 0 && result.belts.len() > inserter_gap as usize {
+        let end = result.belts.len() - inserter_gap as usize;
+        println!(
+            "Leaving {} tile gap at end for inserter",
+            inserter_gap
+        );
+        &result.belts[..end]
+    } else {
+        &result.belts[..]
+    };
+
     if dry_run {
         println!("\nDry run - would place:");
-        for belt in &result.belts {
+        for belt in belts_to_place {
             println!(
                 "  {} at ({:.0},{:.0}) facing {:?}",
                 belt_type, belt.position.x, belt.position.y, belt.direction
@@ -182,7 +216,7 @@ async fn run_belt_line_astar(
     let mut placed = 0;
     let mut failed = 0;
 
-    for belt in &result.belts {
+    for belt in belts_to_place {
         // Check if we need to walk closer
         let char_pos = client.get_character_position().await?;
         let dist = char_pos.distance(&belt.position);

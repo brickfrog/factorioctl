@@ -103,6 +103,13 @@ pub enum GetSubcommand {
         /// Item name (e.g., "iron-plate")
         item: String,
     },
+
+    /// Get items on transport belts in an area
+    BeltContents {
+        /// Area to search (x1,y1,x2,y2 as integers, inclusive)
+        #[arg(long, allow_hyphen_values = true)]
+        area: String,
+    },
 }
 
 pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
@@ -189,6 +196,42 @@ pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<(
         GetSubcommand::RecipesFor { item } => {
             let recipes = client.get_recipes_for_item(&item).await?;
             Output::new(conn.output).print(&recipes)?;
+        }
+        GetSubcommand::BeltContents { area } => {
+            let tile_area = parse_tile_area(&area)?;
+            let world_area = tile_area.to_world();
+            let contents = client.get_belt_contents(world_area).await?;
+
+            // Print summary
+            println!(
+                "Belt contents in area: {} belts, {} total items",
+                contents.belt_count, contents.total_items
+            );
+
+            if !contents.item_summary.is_empty() {
+                println!("\nItem summary:");
+                for item in &contents.item_summary {
+                    println!("  {} x{}", item.name, item.count);
+                }
+            }
+
+            if !contents.belts.is_empty() {
+                println!("\nBelts with items:");
+                for belt in &contents.belts {
+                    let items: Vec<String> = belt
+                        .items
+                        .iter()
+                        .map(|i| format!("{} x{}", i.name, i.count))
+                        .collect();
+                    println!(
+                        "  #{} at ({:.0},{:.0}): {}",
+                        belt.unit_number,
+                        belt.position.x,
+                        belt.position.y,
+                        items.join(", ")
+                    );
+                }
+            }
         }
     }
 

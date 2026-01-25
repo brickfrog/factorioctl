@@ -7,9 +7,9 @@ pub mod server;
 use anyhow::Result;
 
 use crate::world::{
-    Area, BuildResult, CharacterStatus, CollisionMap, CraftResult, Direction, Entity,
-    GatherResult, GridPos, Inventory, MineResult, PlacementSpec, Position, Prototype, Recipe,
-    RecipeSummary, ResourcePatch, Surface, Tick, Tile, WalkResult,
+    Area, BeltContentsResult, BuildResult, CharacterStatus, CollisionMap, CraftResult, Direction,
+    Entity, GatherResult, GridPos, Inventory, MineResult, PlacementSpec, Position, Prototype,
+    Recipe, RecipeSummary, ResourcePatch, Surface, Tick, Tile, WalkResult,
 };
 use lua::LuaCommand;
 use rcon::RconClient;
@@ -1314,6 +1314,46 @@ rcon.print(helpers.table_to_json({{
             entities,
             errors,
         })
+    }
+
+    /// Get items on transport belts in an area
+    pub async fn get_belt_contents(&mut self, area: Area) -> Result<BeltContentsResult> {
+        let lua = format!(
+            r#"local belts = game.surfaces[1].find_entities_filtered{{area = {{{{{}, {}}}, {{{}, {}}}}}, type = "transport-belt"}}
+local belt_items = {{}}
+local item_totals = {{}}
+local total_items = 0
+for _, belt in pairs(belts) do
+    local belt_data = {{position = {{x = belt.position.x, y = belt.position.y}}, unit_number = belt.unit_number, items = {{}}}}
+    for i = 1, belt.get_max_transport_line_index() do
+        local line = belt.get_transport_line(i)
+        local count = line.get_item_count()
+        if count > 0 then
+            for item_name, item_count in pairs(line.get_contents()) do
+                table.insert(belt_data.items, {{name = item_name, count = item_count}})
+                item_totals[item_name] = (item_totals[item_name] or 0) + item_count
+                total_items = total_items + item_count
+            end
+        end
+    end
+    if #belt_data.items > 0 then
+        table.insert(belt_items, belt_data)
+    end
+end
+local summary = {{}}
+for item_name, count in pairs(item_totals) do
+    table.insert(summary, {{name = item_name, count = count}})
+end
+rcon.print(helpers.table_to_json({{belt_count = #belts, total_items = total_items, item_summary = summary, belts = belt_items}}))"#,
+            area.left_top.x,
+            area.left_top.y,
+            area.right_bottom.x,
+            area.right_bottom.y
+        );
+
+        let response = self.execute_lua(&lua).await?;
+        let result: BeltContentsResult = serde_json::from_str(&response)?;
+        Ok(result)
     }
 }
 
