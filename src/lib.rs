@@ -6,6 +6,7 @@
 //! - World model types (entities, resources, tiles, inventories)
 //! - Server process management
 
+pub mod analyze;
 pub mod client;
 pub mod output;
 pub mod world;

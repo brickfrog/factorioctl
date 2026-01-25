@@ -439,3 +439,137 @@ impl Outputable for crate::world::BlueprintPlaceResult {
         }
     }
 }
+
+// --- Analyze Types ---
+
+impl Outputable for crate::analyze::BeltReachResult {
+    fn format_human(&self) -> String {
+        let mut lines = vec![
+            format!("Belt Reachability from ({}, {})", self.origin.x, self.origin.y),
+            format!("  Total connected belts: {}", self.total_belts),
+            format!("  Upstream belts: {}", self.upstream.len()),
+            format!("  Downstream belts: {}", self.downstream.len()),
+        ];
+        if !self.upstream_endpoints.is_empty() {
+            lines.push(format!("  Input endpoints ({}):", self.upstream_endpoints.len()));
+            for ep in &self.upstream_endpoints {
+                lines.push(format!("    ({}, {})", ep.x, ep.y));
+            }
+        }
+        if !self.downstream_endpoints.is_empty() {
+            lines.push(format!("  Output endpoints ({}):", self.downstream_endpoints.len()));
+            for ep in &self.downstream_endpoints {
+                lines.push(format!("    ({}, {})", ep.x, ep.y));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for crate::analyze::BeltNetworkResult {
+    fn format_human(&self) -> String {
+        let mut lines = vec![
+            format!("Belt Networks: {} total", self.total_networks),
+            format!("Total belts: {}", self.total_belts),
+        ];
+        for network in &self.networks {
+            lines.push(format!(
+                "  Network #{}: {} belts, {} inputs, {} outputs",
+                network.id, network.belt_count, network.inputs.len(), network.outputs.len()
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for crate::analyze::BeltGapResult {
+    fn format_human(&self) -> String {
+        if self.gaps.is_empty() {
+            return "No gaps found in belt network".to_string();
+        }
+        let mut lines = vec![format!("Found {} gaps:", self.gap_count)];
+        for gap in &self.gaps {
+            let gap_desc = match &gap.gap_type {
+                crate::analyze::GapType::Missing => "missing belt".to_string(),
+                crate::analyze::GapType::Misaligned => {
+                    format!("misaligned: {}", gap.blocker.as_deref().unwrap_or(""))
+                }
+                crate::analyze::GapType::Blocked => {
+                    format!("blocked by: {}", gap.blocker.as_deref().unwrap_or("unknown"))
+                }
+            };
+            lines.push(format!(
+                "  ({}, {}) -> ({}, {}) [{:?}]: {}",
+                gap.from.x, gap.from.y, gap.to.x, gap.to.y, gap.from_direction, gap_desc
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for Vec<crate::analyze::InserterAnalysis> {
+    fn format_human(&self) -> String {
+        if self.is_empty() {
+            return "No inserters found".to_string();
+        }
+        let mut lines = vec![format!("Found {} inserters:", self.len())];
+        for inserter in self {
+            lines.push(format!(
+                "  #{} {} at ({}, {}) facing {:?}",
+                inserter.unit_number,
+                inserter.inserter_type,
+                inserter.position.x,
+                inserter.position.y,
+                inserter.direction
+            ));
+            let pickup = inserter
+                .pickup_target
+                .as_ref()
+                .map(|e| e.name.as_str())
+                .unwrap_or("empty");
+            let dropoff = inserter
+                .dropoff_target
+                .as_ref()
+                .map(|e| e.name.as_str())
+                .unwrap_or("empty");
+            lines.push(format!(
+                "    Pickup ({}, {}): {}",
+                inserter.pickup_position.x, inserter.pickup_position.y, pickup
+            ));
+            lines.push(format!(
+                "    Dropoff ({}, {}): {}",
+                inserter.dropoff_position.x, inserter.dropoff_position.y, dropoff
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for crate::analyze::EntityReachResult {
+    fn format_human(&self) -> String {
+        let mut lines = vec![
+            format!(
+                "Entity reach analysis at ({}, {}) radius {}:",
+                self.origin.x, self.origin.y, self.radius
+            ),
+            format!("  Belts in range: {}", self.belts.len()),
+            format!("  Inserters interacting: {}", self.inserters.len()),
+            format!("  Other entities: {}", self.interacting_entities.len()),
+        ];
+        if !self.inserters.is_empty() {
+            lines.push("  Interacting inserters:".to_string());
+            for inserter in &self.inserters {
+                let role = if inserter.pickup_position == self.origin {
+                    "picks up from"
+                } else {
+                    "drops to"
+                };
+                lines.push(format!(
+                    "    #{} {} {} this position",
+                    inserter.unit_number, inserter.inserter_type, role
+                ));
+            }
+        }
+        lines.join("\n")
+    }
+}

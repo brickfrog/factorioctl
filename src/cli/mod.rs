@@ -2,6 +2,7 @@
 
 use clap::{Parser, Subcommand};
 
+pub mod analyze;
 pub mod belt;
 pub mod blueprint;
 pub mod build;
@@ -92,6 +93,9 @@ pub struct ResolvedConnectionArgs {
 /// Top-level commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Analyze belt networks and entity interactions
+    Analyze(analyze::AnalyzeCommand),
+
     /// Declarative blueprint placement
     Blueprint(blueprint::BlueprintCommand),
 

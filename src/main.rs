@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
+mod analyze;
 mod cli;
 mod client;
 mod output;
@@ -22,6 +23,7 @@ async fn main() -> Result<()> {
     let conn = cli.connection.resolve();
 
     match cli.command {
+        Commands::Analyze(cmd) => cli::analyze::execute(cmd, &conn).await,
         Commands::Blueprint(cmd) => cli::blueprint::execute(cmd, &conn).await,
         Commands::Config(cmd) => cli::config::execute(cmd).await,
         Commands::Copy(cmd) => cli::clipboard::execute_copy(cmd, &conn).await,

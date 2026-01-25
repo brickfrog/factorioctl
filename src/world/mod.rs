@@ -73,6 +73,25 @@ impl TilePos {
     pub fn manhattan_distance(&self, other: &TilePos) -> u32 {
         ((self.x - other.x).abs() + (self.y - other.y).abs()) as u32
     }
+
+    /// Offset position by 1 tile in the given direction
+    pub fn offset_in_direction(&self, dir: Direction) -> TilePos {
+        self.offset_in_direction_by(dir, 1)
+    }
+
+    /// Offset position by N tiles in the given direction
+    pub fn offset_in_direction_by(&self, dir: Direction, distance: i32) -> TilePos {
+        match dir {
+            Direction::North => TilePos::new(self.x, self.y - distance),
+            Direction::NorthEast => TilePos::new(self.x + distance, self.y - distance),
+            Direction::East => TilePos::new(self.x + distance, self.y),
+            Direction::SouthEast => TilePos::new(self.x + distance, self.y + distance),
+            Direction::South => TilePos::new(self.x, self.y + distance),
+            Direction::SouthWest => TilePos::new(self.x - distance, self.y + distance),
+            Direction::West => TilePos::new(self.x - distance, self.y),
+            Direction::NorthWest => TilePos::new(self.x - distance, self.y - distance),
+        }
+    }
 }
 
 impl std::fmt::Display for TilePos {
@@ -289,9 +308,19 @@ impl Direction {
         }
     }
 
-    /// Get the opposite direction
+    /// Get the opposite direction (180 degrees)
     pub fn opposite(&self) -> Self {
-        Direction::from_factorio((*self as u8 + 4) % 8)
+        Direction::from_factorio((*self as u8 + 8) % 16)
+    }
+
+    /// Rotate 90 degrees clockwise
+    pub fn rotate_cw(&self) -> Self {
+        Direction::from_factorio((*self as u8 + 4) % 16)
+    }
+
+    /// Rotate 90 degrees counter-clockwise
+    pub fn rotate_ccw(&self) -> Self {
+        Direction::from_factorio((*self as u8 + 12) % 16)
     }
 }
 
