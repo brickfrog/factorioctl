@@ -14,7 +14,8 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 use factorioctl::analyze::{
-    analyze_belt_reach, analyze_inserters, find_belt_gaps, find_belt_networks, BeltGraph,
+    analyze_belt_reach, analyze_inserters, detect_sushi_belts, find_belt_gaps, find_belt_networks,
+    trace_belt_sources, BeltGraph,
 };
 use factorioctl::client::FactorioClient;
 use factorioctl::world::{find_belt_route, Area, Direction, GridPos, Position, TilePos};
@@ -222,6 +223,44 @@ pub struct ExecuteLuaParams {
 pub struct BroadcastThoughtParams {
     /// The message/thought to broadcast
     pub message: String,
+}
+
+/// Parameters for belt lane contents tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct BeltLaneContentsParams {
+    /// X coordinate of area center
+    pub x: i32,
+    /// Y coordinate of area center
+    pub y: i32,
+    /// Radius around center
+    #[serde(default = "default_belt_radius")]
+    pub radius: u32,
+}
+
+fn default_belt_radius() -> u32 { 30 }
+
+/// Parameters for sushi detection tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SushiDetectParams {
+    /// X coordinate of area center
+    pub x: i32,
+    /// Y coordinate of area center
+    pub y: i32,
+    /// Radius around center
+    #[serde(default = "default_radius")]
+    pub radius: u32,
+}
+
+/// Parameters for belt source tracing tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct BeltSourcesParams {
+    /// X coordinate of belt to trace
+    pub x: i32,
+    /// Y coordinate of belt to trace
+    pub y: i32,
+    /// Radius to search for connected belts and entities
+    #[serde(default = "default_radius")]
+    pub radius: u32,
 }
 
 // === The MCP Server ===
@@ -680,6 +719,90 @@ impl FactorioMcp {
             )
         };
         self.with_player_messages(result_msg).await
+    }
+
+    /// Get belt contents with lane separation.
+    #[tool(description = "Get items on transport belts with left/right lane separation. \
+        Shows what items are on each lane of each belt, useful for diagnosing sushi belts or lane balancing issues.")]
+    async fn get_belt_lane_contents(&self, Parameters(params): Parameters<BeltLaneContentsParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let area = Area {
+            left_top: Position::new(params.x as f64 - params.radius as f64, params.y as f64 - params.radius as f64),
+            right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
+        };
+
+        let result = match client.get_belt_lane_contents(area).await {
+            Ok(r) => serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e)),
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Detect sushi belts (mixed items on same lane).
+    #[tool(description = "Detect sushi belts - belts with multiple item types mixed on the same lane. \
+        Also identifies lane-separated belts (different items on left vs right lane) and pure belts (single item type). \
+        Detects circular loop networks common in sushi setups.")]
+    async fn detect_sushi_belts(&self, Parameters(params): Parameters<SushiDetectParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let area = Area {
+            left_top: Position::new(params.x as f64 - params.radius as f64, params.y as f64 - params.radius as f64),
+            right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
+        };
+
+        // Get belt lane contents
+        let lane_contents = match client.get_belt_lane_contents(area).await {
+            Ok(r) => r,
+            Err(e) => return self.with_player_messages(format!("Error getting belt contents: {}", e)).await,
+        };
+
+        // Get entities for belt graph
+        let entities = match client.find_entities(area, None, None).await {
+            Ok(e) => e,
+            Err(e) => return self.with_player_messages(format!("Error getting entities: {}", e)).await,
+        };
+
+        let graph = BeltGraph::from_entities(&entities);
+        let result = detect_sushi_belts(&lane_contents, &graph);
+
+        let result_str = serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e));
+        self.with_player_messages(result_str).await
+    }
+
+    /// Trace upstream sources for a belt.
+    #[tool(description = "Trace upstream to find all sources (inserters, drills, other belts) that can feed items onto a belt. \
+        Shows which lane each source feeds and detects circular loops. Useful for debugging why certain items appear on a belt.")]
+    async fn trace_belt_sources(&self, Parameters(params): Parameters<BeltSourcesParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let area = Area {
+            left_top: Position::new(params.x as f64 - params.radius as f64, params.y as f64 - params.radius as f64),
+            right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
+        };
+
+        let entities = match client.find_entities(area, None, None).await {
+            Ok(e) => e,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let graph = BeltGraph::from_entities(&entities);
+        let origin = TilePos::new(params.x, params.y);
+
+        let result = match trace_belt_sources(origin, &graph, &entities) {
+            Some(r) => serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e)),
+            None => format!("No belt found at position ({}, {})", params.x, params.y),
+        };
+        self.with_player_messages(result).await
     }
 
     /// Execute raw Lua command.

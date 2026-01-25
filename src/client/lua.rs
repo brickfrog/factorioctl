@@ -1575,4 +1575,55 @@ rcon.print(helpers.table_to_json(msgs))
         .trim()
         .to_string()
     }
+
+    /// Get items on transport belts with lane separation
+    pub fn get_belt_lane_contents(area: Area) -> String {
+        format!(
+            r#"
+local belts = game.surfaces[1].find_entities_filtered{{
+    area={{{{{},{}}},{{{},{}}}}},
+    type="transport-belt"
+}}
+local result = {{}}
+
+for _, belt in pairs(belts) do
+    local left_items = {{}}
+    local right_items = {{}}
+    local left_count = 0
+    local right_count = 0
+
+    local line1 = belt.get_transport_line(1)
+    if line1 then
+        for name, count in pairs(line1.get_contents()) do
+            table.insert(left_items, {{name=name, count=count}})
+            left_count = left_count + count
+        end
+    end
+
+    local line2 = belt.get_transport_line(2)
+    if line2 then
+        for name, count in pairs(line2.get_contents()) do
+            table.insert(right_items, {{name=name, count=count}})
+            right_count = right_count + count
+        end
+    end
+
+    if #left_items > 0 or #right_items > 0 then
+        table.insert(result, {{
+            position = {{x=math.floor(belt.position.x), y=math.floor(belt.position.y)}},
+            unit_number = belt.unit_number,
+            direction = belt.direction,
+            belt_type = belt.name,
+            left_lane = {{lane=1, items=left_items, item_count=left_count}},
+            right_lane = {{lane=2, items=right_items, item_count=right_count}}
+        }})
+    end
+end
+rcon.print(helpers.table_to_json(result))
+"#,
+            area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y
+        )
+        .trim()
+        .to_string()
+    }
 }

@@ -573,3 +573,185 @@ impl Outputable for crate::analyze::EntityReachResult {
         lines.join("\n")
     }
 }
+
+impl Outputable for crate::world::BeltLaneContentsResult {
+    fn format_human(&self) -> String {
+        let mut lines = vec![
+            format!("Belt Lane Contents ({} belts with items):", self.belt_count),
+            format!("  Total items: {}", self.total_items),
+        ];
+        if !self.item_summary.is_empty() {
+            lines.push("  Item summary:".to_string());
+            for item in &self.item_summary {
+                lines.push(format!("    {} x{}", item.name, item.count));
+            }
+        }
+        if !self.belts.is_empty() {
+            lines.push("  Belts:".to_string());
+            for belt in &self.belts {
+                let left_items: Vec<String> = belt
+                    .left_lane
+                    .items
+                    .iter()
+                    .map(|i| format!("{}x{}", i.name, i.count))
+                    .collect();
+                let right_items: Vec<String> = belt
+                    .right_lane
+                    .items
+                    .iter()
+                    .map(|i| format!("{}x{}", i.name, i.count))
+                    .collect();
+                lines.push(format!(
+                    "    ({}, {}) #{}: L[{}] R[{}]",
+                    belt.position.x,
+                    belt.position.y,
+                    belt.unit_number,
+                    if left_items.is_empty() {
+                        "empty".to_string()
+                    } else {
+                        left_items.join(", ")
+                    },
+                    if right_items.is_empty() {
+                        "empty".to_string()
+                    } else {
+                        right_items.join(", ")
+                    }
+                ));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+impl Outputable for crate::analyze::SushiDetectionResult {
+    fn format_human(&self) -> String {
+        let mut lines = vec![format!(
+            "Sushi Belt Detection: {} sushi, {} lane-separated, {} pure, {} empty",
+            self.sushi_belt_count,
+            self.lane_separated_count,
+            self.pure_belt_count,
+            self.empty_belt_count
+        )];
+
+        if !self.sushi_belts.is_empty() {
+            lines.push(format!("  Sushi belts ({}):", self.sushi_belts.len()));
+            for belt in &self.sushi_belts {
+                lines.push(format!(
+                    "    ({}, {}): L[{}] R[{}]",
+                    belt.position.x,
+                    belt.position.y,
+                    belt.left_lane_items.join(", "),
+                    belt.right_lane_items.join(", ")
+                ));
+            }
+        }
+
+        if !self.lane_separated_belts.is_empty() {
+            lines.push(format!(
+                "  Lane-separated belts ({}):",
+                self.lane_separated_belts.len()
+            ));
+            for belt in &self.lane_separated_belts {
+                lines.push(format!(
+                    "    ({}, {}): L[{}] R[{}]",
+                    belt.position.x,
+                    belt.position.y,
+                    belt.left_lane_items.join(", "),
+                    belt.right_lane_items.join(", ")
+                ));
+            }
+        }
+
+        if !self.looping_networks.is_empty() {
+            lines.push(format!("  Looping networks ({}):", self.looping_networks.len()));
+            for (i, loop_path) in self.looping_networks.iter().enumerate() {
+                let path_str: Vec<String> = loop_path
+                    .iter()
+                    .map(|p| format!("({},{})", p.x, p.y))
+                    .collect();
+                lines.push(format!("    Loop {}: {}", i + 1, path_str.join(" -> ")));
+            }
+        }
+
+        lines.join("\n")
+    }
+}
+
+impl Outputable for crate::analyze::BeltSourceTraceResult {
+    fn format_human(&self) -> String {
+        let mut lines = vec![format!(
+            "Belt Source Trace from ({}, {}):",
+            self.origin.x, self.origin.y
+        )];
+
+        lines.push(format!("  Traced {} belts upstream", self.traced_belt_count));
+
+        if self.is_loop {
+            lines.push("  WARNING: This belt is part of a circular loop".to_string());
+            if let Some(ref path) = self.loop_path {
+                let path_str: Vec<String> =
+                    path.iter().map(|p| format!("({},{})", p.x, p.y)).collect();
+                lines.push(format!("  Loop path: {}", path_str.join(" -> ")));
+            }
+        }
+
+        if !self.possible_items.is_empty() {
+            lines.push(format!(
+                "  Possible items: [{}]",
+                self.possible_items.join(", ")
+            ));
+        }
+
+        let total_sources = self.left_lane_sources.len()
+            + self.right_lane_sources.len()
+            + self.both_lane_sources.len();
+        lines.push(format!("  Total sources found: {}", total_sources));
+
+        if !self.left_lane_sources.is_empty() {
+            lines.push(format!("  Left lane sources ({}):", self.left_lane_sources.len()));
+            for src in &self.left_lane_sources {
+                lines.push(format!(
+                    "    {} {} at ({}, {})",
+                    format!("{:?}", src.source_type),
+                    src.entity_name,
+                    src.position.x,
+                    src.position.y
+                ));
+            }
+        }
+
+        if !self.right_lane_sources.is_empty() {
+            lines.push(format!(
+                "  Right lane sources ({}):",
+                self.right_lane_sources.len()
+            ));
+            for src in &self.right_lane_sources {
+                lines.push(format!(
+                    "    {} {} at ({}, {})",
+                    format!("{:?}", src.source_type),
+                    src.entity_name,
+                    src.position.x,
+                    src.position.y
+                ));
+            }
+        }
+
+        if !self.both_lane_sources.is_empty() {
+            lines.push(format!(
+                "  Both lanes sources ({}):",
+                self.both_lane_sources.len()
+            ));
+            for src in &self.both_lane_sources {
+                lines.push(format!(
+                    "    {} {} at ({}, {})",
+                    format!("{:?}", src.source_type),
+                    src.entity_name,
+                    src.position.x,
+                    src.position.y
+                ));
+            }
+        }
+
+        lines.join("\n")
+    }
+}

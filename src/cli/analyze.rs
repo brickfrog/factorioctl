@@ -4,8 +4,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::analyze::{
-    analyze_belt_reach, analyze_entity_reach, analyze_inserters, find_belt_gaps,
-    find_belt_networks, BeltGraph,
+    analyze_belt_reach, analyze_entity_reach, analyze_inserters, detect_sushi_belts,
+    find_belt_gaps, find_belt_networks, trace_belt_sources, BeltGraph,
 };
 use crate::client::FactorioClient;
 use crate::output::Output;
@@ -36,6 +36,15 @@ pub enum AnalyzeSubcommand {
 
     /// Analyze what entities can interact with a position
     EntityReach(EntityReachArgs),
+
+    /// Get belt contents with lane separation
+    BeltContents(BeltContentsArgs),
+
+    /// Detect sushi belts (mixed items on same lane)
+    SushiDetect(SushiDetectArgs),
+
+    /// Trace upstream sources for a belt
+    BeltSources(BeltSourcesArgs),
 }
 
 /// Arguments for belt reachability analysis
@@ -118,6 +127,54 @@ pub struct EntityReachArgs {
     pub radius: u32,
 }
 
+/// Arguments for belt contents with lane separation
+#[derive(Parser, Debug)]
+pub struct BeltContentsArgs {
+    /// Center X coordinate
+    #[arg(short, long, default_value = "0")]
+    pub x: i32,
+
+    /// Center Y coordinate
+    #[arg(short, long, default_value = "0")]
+    pub y: i32,
+
+    /// Radius to search for belts
+    #[arg(short, long, default_value = "30")]
+    pub radius: u32,
+}
+
+/// Arguments for sushi belt detection
+#[derive(Parser, Debug)]
+pub struct SushiDetectArgs {
+    /// Center X coordinate
+    #[arg(short, long, default_value = "0")]
+    pub x: i32,
+
+    /// Center Y coordinate
+    #[arg(short, long, default_value = "0")]
+    pub y: i32,
+
+    /// Radius to search
+    #[arg(short, long, default_value = "100")]
+    pub radius: u32,
+}
+
+/// Arguments for belt source tracing
+#[derive(Parser, Debug)]
+pub struct BeltSourcesArgs {
+    /// X coordinate of belt to trace
+    #[arg(short, long)]
+    pub x: i32,
+
+    /// Y coordinate of belt to trace
+    #[arg(short, long)]
+    pub y: i32,
+
+    /// Radius to search for connected belts and entities
+    #[arg(short, long, default_value = "100")]
+    pub radius: u32,
+}
+
 pub async fn execute(cmd: AnalyzeCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
     match cmd.subcommand {
         AnalyzeSubcommand::BeltReach(args) => execute_belt_reach(args, conn).await,
@@ -125,6 +182,9 @@ pub async fn execute(cmd: AnalyzeCommand, conn: &ResolvedConnectionArgs) -> Resu
         AnalyzeSubcommand::BeltGaps(args) => execute_belt_gaps(args, conn).await,
         AnalyzeSubcommand::Inserters(args) => execute_inserters(args, conn).await,
         AnalyzeSubcommand::EntityReach(args) => execute_entity_reach(args, conn).await,
+        AnalyzeSubcommand::BeltContents(args) => execute_belt_contents(args, conn).await,
+        AnalyzeSubcommand::SushiDetect(args) => execute_sushi_detect(args, conn).await,
+        AnalyzeSubcommand::BeltSources(args) => execute_belt_sources(args, conn).await,
     }
 }
 
@@ -205,4 +265,52 @@ async fn execute_entity_reach(args: EntityReachArgs, conn: &ResolvedConnectionAr
     let result = analyze_entity_reach(&entities, target, args.radius);
 
     Output::new(conn.output).print(&result)
+}
+
+async fn execute_belt_contents(
+    args: BeltContentsArgs,
+    conn: &ResolvedConnectionArgs,
+) -> Result<()> {
+    let mut client = FactorioClient::connect(&conn.host, conn.port, &conn.password).await?;
+
+    let area = area_from_center(args.x, args.y, args.radius);
+    let result = client.get_belt_lane_contents(area).await?;
+
+    Output::new(conn.output).print(&result)
+}
+
+async fn execute_sushi_detect(args: SushiDetectArgs, conn: &ResolvedConnectionArgs) -> Result<()> {
+    let mut client = FactorioClient::connect(&conn.host, conn.port, &conn.password).await?;
+
+    let area = area_from_center(args.x, args.y, args.radius);
+
+    // Get belt lane contents
+    let lane_contents = client.get_belt_lane_contents(area).await?;
+
+    // Get entities for belt graph
+    let entities = client.find_entities(area, None, None).await?;
+    let graph = BeltGraph::from_entities(&entities);
+
+    // Detect sushi belts
+    let result = detect_sushi_belts(&lane_contents, &graph);
+
+    Output::new(conn.output).print(&result)
+}
+
+async fn execute_belt_sources(args: BeltSourcesArgs, conn: &ResolvedConnectionArgs) -> Result<()> {
+    let mut client = FactorioClient::connect(&conn.host, conn.port, &conn.password).await?;
+
+    let area = area_from_center(args.x, args.y, args.radius);
+    let entities = client.find_entities(area, None, None).await?;
+
+    let graph = BeltGraph::from_entities(&entities);
+    let origin = TilePos::new(args.x, args.y);
+
+    match trace_belt_sources(origin, &graph, &entities) {
+        Some(result) => Output::new(conn.output).print(&result),
+        None => {
+            eprintln!("No belt found at position ({}, {})", args.x, args.y);
+            Ok(())
+        }
+    }
 }

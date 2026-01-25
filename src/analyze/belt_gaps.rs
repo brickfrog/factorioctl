@@ -75,6 +75,7 @@ mod tests {
             direction: dir.to_factorio(),
             health: Some(100.0),
             force: Some("player".to_string()),
+            bounding_box: None,
         }
     }
 
@@ -87,6 +88,7 @@ mod tests {
             direction: 0,
             health: Some(100.0),
             force: Some("player".to_string()),
+            bounding_box: None,
         }
     }
 

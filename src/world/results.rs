@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::entity::InventoryItem;
 use super::Position;
 use super::Entity;
+use super::TilePos;
 
 /// Result of a gather operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,4 +62,45 @@ pub struct BeltContentsResult {
     pub total_items: u32,
     pub item_summary: Vec<InventoryItem>,
     pub belts: Vec<BeltItemSummary>,
+}
+
+/// Items on a single lane of a transport belt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LaneContents {
+    /// Lane number: 1=left (line 1), 2=right (line 2)
+    pub lane: u8,
+    /// Items on this lane
+    pub items: Vec<InventoryItem>,
+    /// Total count of items on this lane
+    pub item_count: u32,
+}
+
+/// Summary of a single belt with lane separation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeltLaneSummary {
+    /// Belt position (tile coordinates)
+    pub position: TilePos,
+    /// Belt entity unit number
+    pub unit_number: u32,
+    /// Belt direction (Factorio direction value)
+    pub direction: u8,
+    /// Belt entity name (e.g., "transport-belt")
+    pub belt_type: String,
+    /// Contents of left lane (line 1)
+    pub left_lane: LaneContents,
+    /// Contents of right lane (line 2)
+    pub right_lane: LaneContents,
+}
+
+/// Result of querying belt contents with lane separation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeltLaneContentsResult {
+    /// Number of belts with items
+    pub belt_count: u32,
+    /// Total items across all belts
+    pub total_items: u32,
+    /// Summary of items by name (combined from both lanes)
+    pub item_summary: Vec<InventoryItem>,
+    /// Per-belt lane information
+    pub belts: Vec<BeltLaneSummary>,
 }

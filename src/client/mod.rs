@@ -7,9 +7,10 @@ pub mod server;
 use anyhow::Result;
 
 use crate::world::{
-    Area, BeltContentsResult, BuildResult, CharacterStatus, CollisionMap, CraftResult, Direction,
-    Entity, GatherResult, GridPos, Inventory, MineResult, PlacementSpec, Position, Prototype,
-    Recipe, RecipeSummary, ResourcePatch, Surface, Tick, Tile, WalkResult,
+    Area, BeltContentsResult, BeltLaneContentsResult, BeltLaneSummary, BuildResult, CharacterStatus,
+    CollisionMap, CraftResult, Direction, Entity, GatherResult, GridPos, Inventory, InventoryItem,
+    LaneContents, MineResult, PlacementSpec, Position, Prototype, Recipe, RecipeSummary,
+    ResourcePatch, Surface, Tick, Tile, TilePos, WalkResult,
 };
 use lua::LuaCommand;
 use rcon::RconClient;
@@ -1376,6 +1377,85 @@ rcon.print(helpers.table_to_json({{belt_count = #belts, total_items = total_item
         let response = self.execute_lua(&lua).await?;
         let result: BeltContentsResult = serde_json::from_str(&response)?;
         Ok(result)
+    }
+
+    /// Get items on transport belts with lane separation
+    pub async fn get_belt_lane_contents(&mut self, area: Area) -> Result<BeltLaneContentsResult> {
+        let lua = LuaCommand::get_belt_lane_contents(area);
+        let response = self.execute_lua(&lua).await?;
+
+        // Parse the raw belt data
+        #[derive(serde::Deserialize)]
+        struct RawBeltLane {
+            position: RawPos,
+            unit_number: u32,
+            direction: u8,
+            belt_type: String,
+            left_lane: RawLane,
+            right_lane: RawLane,
+        }
+        #[derive(serde::Deserialize)]
+        struct RawPos {
+            x: i32,
+            y: i32,
+        }
+        #[derive(serde::Deserialize)]
+        struct RawLane {
+            lane: u8,
+            items: Vec<InventoryItem>,
+            item_count: u32,
+        }
+
+        let raw_belts: Vec<RawBeltLane> = serde_json::from_str(&response)?;
+
+        // Build the result with aggregated summary
+        let mut total_items = 0u32;
+        let mut item_totals: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+
+        let belts: Vec<BeltLaneSummary> = raw_belts
+            .into_iter()
+            .map(|raw| {
+                // Aggregate items
+                for item in &raw.left_lane.items {
+                    *item_totals.entry(item.name.clone()).or_insert(0) += item.count;
+                    total_items += item.count;
+                }
+                for item in &raw.right_lane.items {
+                    *item_totals.entry(item.name.clone()).or_insert(0) += item.count;
+                    total_items += item.count;
+                }
+
+                BeltLaneSummary {
+                    position: TilePos::new(raw.position.x, raw.position.y),
+                    unit_number: raw.unit_number,
+                    direction: raw.direction,
+                    belt_type: raw.belt_type,
+                    left_lane: LaneContents {
+                        lane: raw.left_lane.lane,
+                        items: raw.left_lane.items,
+                        item_count: raw.left_lane.item_count,
+                    },
+                    right_lane: LaneContents {
+                        lane: raw.right_lane.lane,
+                        items: raw.right_lane.items,
+                        item_count: raw.right_lane.item_count,
+                    },
+                }
+            })
+            .collect();
+
+        let item_summary: Vec<InventoryItem> = item_totals
+            .into_iter()
+            .map(|(name, count)| InventoryItem { name, count })
+            .collect();
+
+        Ok(BeltLaneContentsResult {
+            belt_count: belts.len() as u32,
+            total_items,
+            item_summary,
+            belts,
+        })
     }
 }
 
