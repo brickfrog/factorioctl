@@ -64,7 +64,7 @@ pub fn find_belt_gaps(graph: &BeltGraph, all_entities: &[Entity]) -> BeltGapResu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::Position;
+    use crate::world::{Direction, Position};
 
     fn make_belt(x: i32, y: i32, dir: Direction) -> Entity {
         Entity {

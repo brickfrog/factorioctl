@@ -29,6 +29,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 which = "7"
 whoami = "1"
 
+# MCP (Model Context Protocol) server
+rmcp = { version = "0.14", features = ["server", "transport-io"] }
+
 [dev-dependencies]
 # Testing
 tokio-test = "0.4"
