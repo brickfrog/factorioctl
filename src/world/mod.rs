@@ -1,5 +1,6 @@
 //! World model types for Factorio entities, resources, and terrain
 
+mod blueprint;
 mod entity;
 mod inventory;
 mod resource;
@@ -7,6 +8,7 @@ mod results;
 mod surface;
 mod tile;
 
+pub use blueprint::*;
 pub use entity::*;
 pub use inventory::*;
 pub use resource::*;

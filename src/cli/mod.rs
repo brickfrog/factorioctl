@@ -2,6 +2,7 @@
 
 use clap::{Parser, Subcommand};
 
+pub mod blueprint;
 pub mod build;
 pub mod character;
 pub mod config;
@@ -86,6 +87,9 @@ pub struct ResolvedConnectionArgs {
 /// Top-level commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Declarative blueprint placement
+    Blueprint(blueprint::BlueprintCommand),
+
     /// Configure connection settings
     Config(config::ConfigCommand),
 

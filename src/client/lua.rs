@@ -887,6 +887,35 @@ end
         .to_string()
     }
 
+    /// Rotate an entity to a new direction
+    pub fn rotate_entity(unit_number: u32, direction: u8) -> String {
+        format!(
+            r#"
+-- Find entity by unit_number via search
+local e = nil
+for _, entity in pairs(game.surfaces[1].find_entities_filtered{{area={{{{-500,-500}},{{500,500}}}}}}) do
+    if entity.unit_number == {} then
+        e = entity
+        break
+    end
+end
+if e then
+    if e.supports_direction then
+        e.direction = {}
+        rcon.print("ok")
+    else
+        rcon.print('{{"error": "Entity does not support rotation"}}')
+    end
+else
+    rcon.print('{{"error": "Entity not found"}}')
+end
+"#,
+            unit_number, direction
+        )
+        .trim()
+        .to_string()
+    }
+
     /// Insert items into an entity
     pub fn insert_items(unit_number: u32, item: &str, count: u32, inventory_type: &str) -> String {
         let inv_define = match inventory_type {

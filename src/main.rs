@@ -22,6 +22,7 @@ async fn main() -> Result<()> {
     let conn = cli.connection.resolve();
 
     match cli.command {
+        Commands::Blueprint(cmd) => cli::blueprint::execute(cmd, &conn).await,
         Commands::Config(cmd) => cli::config::execute(cmd).await,
         Commands::Server(cmd) => cli::server::execute(cmd).await,
         Commands::Get(cmd) => cli::get::execute(cmd, &conn).await,

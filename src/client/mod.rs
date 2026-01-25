@@ -405,6 +405,16 @@ end
         Ok(())
     }
 
+    /// Rotate entity to a new direction
+    pub async fn rotate_entity(&mut self, unit_number: u32, direction: u8) -> Result<()> {
+        let lua = LuaCommand::rotate_entity(unit_number, direction);
+        let response = self.execute_lua(&lua).await?;
+        if response.contains("error") {
+            anyhow::bail!("Failed to rotate entity: {}", response);
+        }
+        Ok(())
+    }
+
     /// Insert items into an entity
     pub async fn insert_items(
         &mut self,
