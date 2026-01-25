@@ -352,7 +352,7 @@ impl FactorioMcp {
     // --- Query Tools ---
 
     /// Get all entities in an area. Returns entity names, positions, and types.
-    #[tool(description = "Get all entities in an area. Returns entity names, positions, types, and unit numbers.")]
+    #[tool(description = "Get all entities in an area. Returns entity names, positions, types, and unit numbers. TIP: Don't scan excessively - trust your memory of recent scans.")]
     async fn get_entities(&self, Parameters(params): Parameters<GetEntitiesParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
@@ -417,7 +417,7 @@ impl FactorioMcp {
     }
 
     /// Get current character status including position and health.
-    #[tool(description = "Get current character status including position, health, and walking state.")]
+    #[tool(description = "Get current character status including position, health, and walking state. TIP: Only check when you need to - avoid over-verifying after every action.")]
     async fn get_character(&self) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
@@ -571,7 +571,7 @@ impl FactorioMcp {
     // --- Action Tools ---
 
     /// Walk character to a position.
-    #[tool(description = "Walk character to a position using pathfinding.")]
+    #[tool(description = "Walk character to a position using pathfinding. TIP: Call broadcast_thought in the SAME response to narrate your movement while walking.")]
     async fn walk_to(&self, Parameters(params): Parameters<PositionParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
@@ -852,7 +852,7 @@ impl FactorioMcp {
     /// Broadcast a thought or message to the human player.
     #[tool(description = "Broadcast a thought or message to the human player. \
         Displays in-game (console and/or flying text) and speaks via TTS based on config. \
-        Use this to communicate your thinking, status updates, or observations.")]
+        IMPORTANT: Call this frequently and IN PARALLEL with action tools like walk_to. Good streamers narrate constantly - fill the silence!")]
     async fn broadcast_thought(&self, Parameters(params): Parameters<BroadcastThoughtParams>) -> String {
         use std::process::Stdio;
         use tokio::process::Command;
