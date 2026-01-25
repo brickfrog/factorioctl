@@ -1,0 +1,67 @@
+{
+  "name": "Real factory section with obstacles",
+  "description": "Captured from a real Factorio game. Contains a production line with drills, furnaces, and an assembler. Key challenge: belt lines with furnaces in the middle that require routing around.",
+  "source": "Captured 2024-01-24 from area (38,-32) to (61,-18)",
+  "bounds": {
+    "left_top": [38, -32],
+    "right_bottom": [62, -18]
+  },
+  "blocked": [
+    {"comment": "Stone furnace at (43,-30) - 2x2 centered at (43,-30)", "pos": [[42,-31], [43,-31], [42,-30], [43,-30]]},
+    {"comment": "Burner mining drills stack at x=47-48, y=-31 to -24 (4 drills)", "pos": [
+      [47,-31], [48,-31], [47,-30], [48,-30],
+      [47,-29], [48,-29], [47,-28], [48,-28],
+      [47,-27], [48,-27], [47,-26], [48,-26],
+      [47,-25], [48,-25], [47,-24], [48,-24]
+    ]},
+    {"comment": "Stone furnace stack at x=49-50, y=-31 to -24 (4 furnaces)", "pos": [
+      [49,-31], [50,-31], [49,-30], [50,-30],
+      [49,-29], [50,-29], [49,-28], [50,-28],
+      [49,-27], [50,-27], [49,-26], [50,-26],
+      [49,-25], [50,-25], [49,-24], [50,-24]
+    ]},
+    {"comment": "Assembling machine at (52,-26) - 3x3", "pos": [
+      [51,-27], [52,-27], [53,-27],
+      [51,-26], [52,-26], [53,-26],
+      [51,-25], [52,-25], [53,-25]
+    ]},
+    {"comment": "Burner mining drill at (58,-24) - 2x2", "pos": [[57,-25], [58,-25], [57,-24], [58,-24]]},
+    {"comment": "Stone furnace in belt line at (51,-21) - 2x2 - KEY OBSTACLE", "pos": [[50,-22], [51,-22], [50,-21], [51,-21]]},
+    {"comment": "Stone furnace at (50,-20) - 2x2", "pos": [[49,-21], [50,-21], [49,-20], [50,-20]]},
+    {"comment": "Burner mining drill at (60,-20) - 2x2", "pos": [[59,-21], [60,-21], [59,-20], [60,-20]]}
+  ],
+  "test_cases": [
+    {
+      "name": "route_around_furnace_in_belt_line",
+      "description": "Route from west side (46,-21) to east side (55,-21), must go around furnace at (50-51,-21)",
+      "start": [46, -21],
+      "goal": [55, -21],
+      "expect_success": true,
+      "expect_min_belts": 11,
+      "expect_turns_gte": 2
+    },
+    {
+      "name": "route_through_drill_furnace_gap",
+      "description": "Route from above the stacks (45,-32) to below (45,-18), must navigate around all obstacles",
+      "start": [45, -32],
+      "goal": [45, -18],
+      "expect_success": true
+    },
+    {
+      "name": "route_between_stacks",
+      "description": "Route from west of drill stack (46,-28) to east of furnace stack (51,-28)",
+      "start": [46, -28],
+      "goal": [54, -28],
+      "expect_success": true,
+      "expect_turns_gte": 2
+    },
+    {
+      "name": "blocked_start_on_furnace",
+      "description": "Start position is on a furnace tile",
+      "start": [50, -30],
+      "goal": [55, -30],
+      "expect_success": false,
+      "expect_error_contains": "Start position is blocked"
+    }
+  ]
+}

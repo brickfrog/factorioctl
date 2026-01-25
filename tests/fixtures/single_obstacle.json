@@ -1,0 +1,40 @@
+{
+  "name": "Single 2x2 obstacle in center",
+  "description": "A 20x20 tile area with a 2x2 furnace-like obstacle centered at (2,0). Tests pathfinding around obstacles.",
+  "bounds": {
+    "left_top": [-10, -10],
+    "right_bottom": [10, 10]
+  },
+  "blocked": [
+    [1, -1], [2, -1],
+    [1, 0], [2, 0],
+    [1, 1], [2, 1]
+  ],
+  "test_cases": [
+    {
+      "name": "path_around_obstacle",
+      "description": "Path from (0,0) to (5,0) must go around the obstacle at (1-2, -1 to 1)",
+      "start": [0, 0],
+      "goal": [5, 0],
+      "expect_success": true,
+      "expect_min_belts": 7,
+      "expect_turns_gte": 2
+    },
+    {
+      "name": "start_blocked",
+      "description": "Start position is inside the obstacle",
+      "start": [1, 0],
+      "goal": [5, 0],
+      "expect_success": false,
+      "expect_error_contains": "Start position is blocked"
+    },
+    {
+      "name": "goal_blocked",
+      "description": "Goal position is inside the obstacle",
+      "start": [0, 0],
+      "goal": [2, 0],
+      "expect_success": false,
+      "expect_error_contains": "Goal position is blocked"
+    }
+  ]
+}

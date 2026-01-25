@@ -1,0 +1,35 @@
+{
+  "name": "Open area with no obstacles",
+  "description": "A 20x20 tile area with no blocked tiles. Tests basic pathfinding without obstacles.",
+  "bounds": {
+    "left_top": [-10, -10],
+    "right_bottom": [10, 10]
+  },
+  "blocked": [],
+  "test_cases": [
+    {
+      "name": "straight_horizontal",
+      "start": [0, 0],
+      "goal": [5, 0],
+      "expect_success": true,
+      "expect_belt_count": 6,
+      "expect_turn_count": 0
+    },
+    {
+      "name": "straight_vertical",
+      "start": [0, 0],
+      "goal": [0, 5],
+      "expect_success": true,
+      "expect_belt_count": 6,
+      "expect_turn_count": 0
+    },
+    {
+      "name": "diagonal_path",
+      "start": [0, 0],
+      "goal": [3, 3],
+      "expect_success": true,
+      "expect_min_belts": 7,
+      "expect_turns_gte": 1
+    }
+  ]
+}
