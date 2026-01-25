@@ -253,6 +253,13 @@ pub struct RemoveEntityParams {
     pub unit_number: u32,
 }
 
+/// Parameters for get_machine_belt_positions tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MachineBeltPositionsParams {
+    /// Unit number of the machine (furnace, assembler, etc.)
+    pub unit_number: u32,
+}
+
 /// Parameters for execute_lua tool
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ExecuteLuaParams {
@@ -593,20 +600,104 @@ impl FactorioMcp {
             Ok(entities) => {
                 let info: Vec<serde_json::Value> = entities
                     .into_iter()
-                    .map(|e| serde_json::json!({
-                        "unit_number": e.unit_number,
-                        "name": e.name,
-                        "type": e.entity_type,
-                        "x": e.position.x,
-                        "y": e.position.y,
-                        "direction": e.direction,
-                    }))
+                    .map(|e| {
+                        // Calculate size from bounding box if available
+                        let size = e.bounding_box.as_ref().map(|bb| {
+                            let width = (bb.right_bottom.x - bb.left_top.x).round() as i32;
+                            let height = (bb.right_bottom.y - bb.left_top.y).round() as i32;
+                            serde_json::json!({ "width": width, "height": height })
+                        });
+                        serde_json::json!({
+                            "unit_number": e.unit_number,
+                            "name": e.name,
+                            "type": e.entity_type,
+                            "x": e.position.x,
+                            "y": e.position.y,
+                            "direction": e.direction,
+                            "size": size,
+                        })
+                    })
                     .collect();
                 serde_json::to_string_pretty(&info).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
         };
         self.with_player_messages(result).await
+    }
+
+    /// Get belt and inserter positions for a machine.
+    #[tool(description = "Get the correct belt and inserter positions for connecting to a machine (furnace, assembler, etc.). \
+        Returns input_belt, input_inserter, output_belt, output_inserter positions accounting for machine size. \
+        Use this before routing belts to machines to ensure correct spacing for inserters.")]
+    async fn get_machine_belt_positions(&self, Parameters(params): Parameters<MachineBeltPositionsParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        // Get the entity
+        let entity = match client.get_entity(params.unit_number).await {
+            Ok(e) => e,
+            Err(e) => return self.with_player_messages(format!("Error getting entity: {}", e)).await,
+        };
+
+        // Calculate machine size from bounding box or use defaults
+        let (width, height) = if let Some(bb) = &entity.bounding_box {
+            let w = (bb.right_bottom.x - bb.left_top.x).round() as i32;
+            let h = (bb.right_bottom.y - bb.left_top.y).round() as i32;
+            (w, h)
+        } else {
+            // Default sizes for common machines
+            match entity.name.as_str() {
+                "stone-furnace" | "steel-furnace" | "electric-furnace" => (2, 2),
+                "burner-mining-drill" | "electric-mining-drill" => (2, 2),
+                "assembling-machine-1" | "assembling-machine-2" | "assembling-machine-3" => (3, 3),
+                "chemical-plant" => (3, 3),
+                "oil-refinery" => (5, 5),
+                "lab" => (3, 3),
+                _ => (1, 1),
+            }
+        };
+
+        let cx = entity.position.x.floor() as i32;
+        let cy = entity.position.y.floor() as i32;
+
+        // Calculate positions based on machine size
+        // For a 2x2 machine centered at (cx, cy):
+        //   - South edge is at cy + 1 (machine occupies cy to cy+1)
+        //   - North edge is at cy - 1
+        // Input belt goes 2 tiles south of center (1 for machine edge + 1 for inserter)
+        // Output belt goes 2 tiles north of center
+        let half_h = height / 2;
+
+        let input_belt_y = cy + half_h + 1;      // 1 tile gap for inserter
+        let input_inserter_y = cy + half_h;      // Adjacent to machine south edge
+        let output_belt_y = cy - half_h - 2;     // 1 tile gap for inserter
+        let output_inserter_y = cy - half_h - 1; // Adjacent to machine north edge
+
+        let result = serde_json::json!({
+            "machine": {
+                "unit_number": entity.unit_number,
+                "name": entity.name,
+                "position": { "x": cx, "y": cy },
+                "size": { "width": width, "height": height }
+            },
+            "input": {
+                "belt_y": input_belt_y,
+                "inserter_y": input_inserter_y,
+                "inserter_direction": 8,  // South: picks from North (belt), drops to South (machine)
+                "description": format!("Place belt at y={}, inserter at y={} facing South (direction=8)", input_belt_y, input_inserter_y)
+            },
+            "output": {
+                "belt_y": output_belt_y,
+                "inserter_y": output_inserter_y,
+                "inserter_direction": 0,  // North: picks from South (machine), drops to North (belt)
+                "description": format!("Place belt at y={}, inserter at y={} facing North (direction=0)", output_belt_y, output_inserter_y)
+            },
+            "note": "For a row of machines at the same Y, run belts horizontally at the belt_y positions"
+        });
+
+        self.with_player_messages(serde_json::to_string_pretty(&result).unwrap_or_default()).await
     }
 
     /// Render an ASCII map of an area.
@@ -1057,6 +1148,28 @@ impl FactorioMcp {
             return self.with_player_messages(format!("Route failed: {}", result.error.unwrap_or_else(|| "unknown error".to_string()))).await;
         }
 
+        // Check inventory for required materials
+        let inventory = match client.character_inventory().await {
+            Ok(inv) => inv,
+            Err(e) => return self.with_player_messages(format!("Error checking inventory: {}", e)).await,
+        };
+
+        // Count surface belts and underground belts needed
+        let surface_belts_needed = result.belts.iter().filter(|b| b.kind == BeltKind::Surface).count() as u32;
+        let underground_belts_needed = result.belts.iter().filter(|b| b.kind != BeltKind::Surface).count() as u32;
+
+        // Count belts in inventory
+        let surface_belts_have = inventory.items.iter()
+            .find(|i| i.name == params.belt_type)
+            .map(|i| i.count)
+            .unwrap_or(0);
+
+        let underground_belt_name = underground_config.as_ref().map(|c| c.entity_name.as_str());
+        let underground_belts_have = underground_belt_name
+            .and_then(|name| inventory.items.iter().find(|i| i.name == name))
+            .map(|i| i.count)
+            .unwrap_or(0);
+
         if params.dry_run {
             let mut msg = format!(
                 "Dry run - would place {} belts with {} turns",
@@ -1066,8 +1179,35 @@ impl FactorioMcp {
             if result.underground_count > 0 {
                 msg.push_str(&format!(", {} underground pairs", result.underground_count));
             }
-            msg.push_str(&format!(":\n{}", serde_json::to_string_pretty(&result.belts).unwrap_or_default()));
+            // Show inventory status
+            msg.push_str(&format!("\nInventory: {} {} (need {})",
+                surface_belts_have, params.belt_type, surface_belts_needed));
+            if underground_belts_needed > 0 {
+                if let Some(ug_name) = underground_belt_name {
+                    msg.push_str(&format!(", {} {} (need {})",
+                        underground_belts_have, ug_name, underground_belts_needed));
+                }
+            }
+            if surface_belts_have < surface_belts_needed || underground_belts_have < underground_belts_needed {
+                msg.push_str("\nWARNING: INSUFFICIENT MATERIALS - route will fail");
+            }
+            msg.push_str(&format!("\n{}", serde_json::to_string_pretty(&result.belts).unwrap_or_default()));
             return self.with_player_messages(msg).await;
+        }
+
+        // Pre-check: fail early if not enough materials
+        if surface_belts_have < surface_belts_needed {
+            return self.with_player_messages(format!(
+                "Insufficient materials: need {} {}, have {}. Craft more belts first.",
+                surface_belts_needed, params.belt_type, surface_belts_have
+            )).await;
+        }
+        if underground_belts_needed > 0 && underground_belts_have < underground_belts_needed {
+            let ug_name = underground_belt_name.unwrap_or("underground-belt");
+            return self.with_player_messages(format!(
+                "Insufficient materials: need {} {}, have {}. Craft more underground belts first.",
+                underground_belts_needed, ug_name, underground_belts_have
+            )).await;
         }
 
         // Place the belts
