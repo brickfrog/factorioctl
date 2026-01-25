@@ -10,6 +10,7 @@ pub mod exec;
 pub mod gather;
 pub mod get;
 pub mod insert;
+pub mod map;
 pub mod mine;
 pub mod place;
 pub mod remove;
@@ -129,4 +130,7 @@ pub enum Commands {
 
     /// Execute raw Lua command
     Exec(exec::ExecCommand),
+
+    /// Render ASCII map of an area
+    Map(map::MapCommand),
 }
