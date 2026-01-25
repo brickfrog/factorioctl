@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use super::parsing::{parse_area, parse_position};
 use crate::cli::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::{Area, Blueprint, BlueprintEntity, Position};
+use crate::world::{Blueprint, BlueprintEntity, Direction, Position};
 
 /// Default clipboard file location
 fn default_clipboard_path() -> PathBuf {
@@ -306,40 +307,6 @@ pub async fn execute_paste(cmd: PasteCommand, conn: &ResolvedConnectionArgs) -> 
     Ok(())
 }
 
-fn parse_area(s: &str) -> Result<Area> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
-    if parts.len() != 4 {
-        anyhow::bail!("Area must be x1,y1,x2,y2");
-    }
-    Ok(Area {
-        left_top: Position {
-            x: parts[0],
-            y: parts[1],
-        },
-        right_bottom: Position {
-            x: parts[2],
-            y: parts[3],
-        },
-    })
-}
-
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
-    }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
-}
-
 fn direction_short_name(dir: u8) -> String {
     match dir {
         0 => "n",
@@ -433,17 +400,6 @@ fn transform_direction(dir: &str, rotation: i32, flip_h: bool, flip_v: bool) -> 
 }
 
 /// Parse direction string to Direction enum
-fn parse_direction_str(s: &str) -> crate::world::Direction {
-    use crate::world::Direction;
-    match s.to_lowercase().as_str() {
-        "n" | "north" => Direction::North,
-        "ne" | "northeast" => Direction::NorthEast,
-        "e" | "east" => Direction::East,
-        "se" | "southeast" => Direction::SouthEast,
-        "s" | "south" => Direction::South,
-        "sw" | "southwest" => Direction::SouthWest,
-        "w" | "west" => Direction::West,
-        "nw" | "northwest" => Direction::NorthWest,
-        _ => Direction::North,
-    }
+fn parse_direction_str(s: &str) -> Direction {
+    Direction::from_name(s).unwrap_or(Direction::North)
 }

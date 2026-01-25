@@ -16,6 +16,7 @@ pub mod get;
 pub mod insert;
 pub mod map;
 pub mod mine;
+pub mod parsing;
 pub mod place;
 pub mod power;
 pub mod remove;

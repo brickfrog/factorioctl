@@ -3,10 +3,10 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
+use super::parsing::{parse_tile, parse_tile_area};
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::Output;
-use crate::world::{TileArea, TilePos};
 
 #[derive(Args, Debug)]
 pub struct GetCommand {
@@ -196,48 +196,3 @@ pub async fn execute(cmd: GetCommand, conn: &ResolvedConnectionArgs) -> Result<(
     Ok(())
 }
 
-/// Parse integer tile area (x1,y1,x2,y2 - inclusive corners)
-fn parse_tile_area(s: &str) -> Result<TileArea> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        anyhow::bail!("Area must be x1,y1,x2,y2 (integers)");
-    }
-
-    let x1: i32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("x1 must be an integer, got '{}'", parts[0].trim()))?;
-    let y1: i32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("y1 must be an integer, got '{}'", parts[1].trim()))?;
-    let x2: i32 = parts[2]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("x2 must be an integer, got '{}'", parts[2].trim()))?;
-    let y2: i32 = parts[3]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("y2 must be an integer, got '{}'", parts[3].trim()))?;
-
-    Ok(TileArea::new(x1, y1, x2, y2))
-}
-
-/// Parse integer tile position (x,y)
-fn parse_tile(s: &str) -> Result<TilePos> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y (integers)");
-    }
-
-    let x: i32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
-    let y: i32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
-
-    Ok(TilePos::new(x, y))
-}

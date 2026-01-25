@@ -3,10 +3,10 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
+use super::parsing::{parse_position, parse_tile};
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::Output;
-use crate::world::{Position, TilePos};
 
 #[derive(Args, Debug)]
 pub struct CharacterCommand {
@@ -73,35 +73,3 @@ pub async fn execute(cmd: CharacterCommand, conn: &ResolvedConnectionArgs) -> Re
     Ok(())
 }
 
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
-    }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
-}
-
-/// Parse integer tile coordinates (x,y)
-fn parse_tile(s: &str) -> Result<TilePos> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y (integers)");
-    }
-
-    let x: i32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
-    let y: i32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
-
-    Ok(TilePos::new(x, y))
-}

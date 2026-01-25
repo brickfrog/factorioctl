@@ -3,9 +3,10 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
+use super::parsing::parse_tile;
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::{find_belt_route, Area, GridPos, Position, TilePos};
+use crate::world::{find_belt_route, Area, GridPos, Position};
 
 #[derive(Args, Debug)]
 pub struct BeltCommand {
@@ -227,23 +228,4 @@ async fn run_belt_line_astar(
 
     println!("Placed {} belts, {} failed", placed, failed);
     Ok(())
-}
-
-/// Parse integer tile coordinates (x,y)
-fn parse_tile(s: &str) -> Result<TilePos> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y (integers)");
-    }
-
-    let x: i32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
-    let y: i32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
-
-    Ok(TilePos::new(x, y))
 }

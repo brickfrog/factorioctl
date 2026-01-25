@@ -5,7 +5,6 @@ use clap::{Args, Subcommand};
 
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::output::Output;
 
 #[derive(Args, Debug)]
 pub struct ResearchCommand {

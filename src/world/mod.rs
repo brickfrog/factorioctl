@@ -293,7 +293,7 @@ impl Direction {
         }
     }
 
-    /// Parse from string name
+    /// Parse from string name (e.g., "north", "n", "up")
     pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "north" | "n" | "up" => Some(Direction::North),
@@ -306,6 +306,39 @@ impl Direction {
             "northwest" | "nw" => Some(Direction::NorthWest),
             _ => None,
         }
+    }
+
+    /// Get the short name for this direction
+    pub fn to_name(&self) -> &'static str {
+        match self {
+            Direction::North => "north",
+            Direction::NorthEast => "northeast",
+            Direction::East => "east",
+            Direction::SouthEast => "southeast",
+            Direction::South => "south",
+            Direction::SouthWest => "southwest",
+            Direction::West => "west",
+            Direction::NorthWest => "northwest",
+        }
+    }
+
+    /// Parse from CLI input: name (n/north), number (0-7), or factorio value (0,2,4...)
+    pub fn parse(s: &str) -> Option<Self> {
+        // Try as name first
+        if let Some(dir) = Self::from_name(s) {
+            return Some(dir);
+        }
+        // Try as simple index (0-7)
+        if let Ok(n) = s.parse::<u8>() {
+            if n <= 7 {
+                return Some(Self::from_factorio(n * 2));
+            }
+            // Try as factorio value (0,2,4,6,8,10,12,14)
+            if n <= 14 && n % 2 == 0 {
+                return Some(Self::from_factorio(n));
+            }
+        }
+        None
     }
 
     /// Get the opposite direction (180 degrees)

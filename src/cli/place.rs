@@ -3,10 +3,11 @@
 use anyhow::Result;
 use clap::Args;
 
+use super::parsing::{parse_direction, parse_tile};
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::Output;
-use crate::world::{entity_size, Direction, TilePos};
+use crate::world::entity_size;
 
 #[derive(Args, Debug)]
 pub struct PlaceCommand {
@@ -42,37 +43,4 @@ pub async fn execute(cmd: PlaceCommand, conn: &ResolvedConnectionArgs) -> Result
 
     client.close().await?;
     Ok(())
-}
-
-/// Parse integer tile coordinates (x,y)
-fn parse_tile(s: &str) -> Result<TilePos> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y (integers)");
-    }
-
-    let x: i32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
-    let y: i32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
-
-    Ok(TilePos::new(x, y))
-}
-
-fn parse_direction(s: &str) -> Result<Direction> {
-    match s.to_lowercase().as_str() {
-        "n" | "north" | "0" => Ok(Direction::North),
-        "ne" | "northeast" | "1" => Ok(Direction::NorthEast),
-        "e" | "east" | "2" => Ok(Direction::East),
-        "se" | "southeast" | "3" => Ok(Direction::SouthEast),
-        "s" | "south" | "4" => Ok(Direction::South),
-        "sw" | "southwest" | "5" => Ok(Direction::SouthWest),
-        "w" | "west" | "6" => Ok(Direction::West),
-        "nw" | "northwest" | "7" => Ok(Direction::NorthWest),
-        _ => anyhow::bail!("Invalid direction: {}", s),
-    }
 }

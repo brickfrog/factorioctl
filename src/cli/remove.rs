@@ -3,9 +3,9 @@
 use anyhow::Result;
 use clap::Args;
 
+use super::parsing::parse_position;
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::Position;
 
 #[derive(Args, Debug)]
 pub struct RemoveCommand {
@@ -34,18 +34,4 @@ pub async fn execute(cmd: RemoveCommand, conn: &ResolvedConnectionArgs) -> Resul
 
     client.close().await?;
     Ok(())
-}
-
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
-    }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
 }

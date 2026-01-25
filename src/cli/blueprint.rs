@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use super::parsing::{parse_area, parse_position};
 use crate::cli::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::{Output, OutputFormat, Outputable};
@@ -271,40 +272,6 @@ fn resolve_origin(blueprint: &Blueprint, origin_x: Option<f64>, origin_y: Option
         origin_x.unwrap_or(blueprint.origin[0]),
         origin_y.unwrap_or(blueprint.origin[1]),
     ]
-}
-
-fn parse_area(s: &str) -> Result<Area> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
-    if parts.len() != 4 {
-        anyhow::bail!("Area must be x1,y1,x2,y2");
-    }
-    Ok(Area {
-        left_top: Position {
-            x: parts[0],
-            y: parts[1],
-        },
-        right_bottom: Position {
-            x: parts[2],
-            y: parts[3],
-        },
-    })
-}
-
-fn parse_position(s: &str) -> Result<Position> {
-    let parts: Vec<f64> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()?;
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y");
-    }
-    Ok(Position {
-        x: parts[0],
-        y: parts[1],
-    })
 }
 
 /// Compute the diff between blueprint and world state

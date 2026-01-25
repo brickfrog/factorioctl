@@ -778,7 +778,6 @@ end
 
         // Walk through each waypoint
         let mut total_distance = 0.0;
-        let mut current_pos = start_pos;
 
         for waypoint in &path_result.path {
             let waypoint_pos = waypoint.to_position();
@@ -796,8 +795,6 @@ end
                     reason: Some("Blocked on path".to_string()),
                 });
             }
-
-            current_pos = result.final_position;
         }
 
         // Check if we arrived
@@ -939,7 +936,6 @@ if c then c.walking_state = {{walking=true, direction=defines.direction.{}}} end
         amount: u32,
         radius: u32,
     ) -> Result<GatherResult> {
-        let start_pos = self.get_character_position().await?;
         let mut total_distance = 0.0;
         let mut gathered = 0u32;
 

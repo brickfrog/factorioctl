@@ -3,10 +3,11 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
+use super::parsing::parse_tile;
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::output::{Output, OutputFormat};
-use crate::world::{entity_size, TilePos};
+use crate::world::entity_size;
 
 #[derive(Args, Debug)]
 pub struct BuildCommand {
@@ -158,23 +159,4 @@ pub async fn execute(cmd: BuildCommand, conn: &ResolvedConnectionArgs) -> Result
 
     client.close().await?;
     Ok(())
-}
-
-/// Parse integer tile coordinates (x,y)
-fn parse_tile(s: &str) -> Result<TilePos> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 2 {
-        anyhow::bail!("Position must be x,y (integers)");
-    }
-
-    let x: i32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
-    let y: i32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
-
-    Ok(TilePos::new(x, y))
 }
