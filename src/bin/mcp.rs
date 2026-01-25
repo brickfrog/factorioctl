@@ -138,9 +138,9 @@ pub struct PlaceEntityParams {
     pub x: f64,
     /// Y coordinate to place at
     pub y: f64,
-    /// Direction: 0=North, 4=East, 8=South, 12=West
+    /// Direction: "north", "east", "south", "west" (or shorthand "n", "e", "s", "w", or numbers 0/4/8/12)
     #[serde(default)]
-    pub direction: u8,
+    pub direction: String,
 }
 
 /// Parameters for mine_at tool
@@ -626,9 +626,10 @@ impl FactorioMcp {
     }
 
     /// Get belt and inserter positions for a machine.
-    #[tool(description = "Get the correct belt and inserter positions for connecting to a machine (furnace, assembler, etc.). \
-        Returns input_belt, input_inserter, output_belt, output_inserter positions accounting for machine size. \
-        Use this before routing belts to machines to ensure correct spacing for inserters.")]
+    #[tool(description = "Get the correct belt and inserter positions for connecting to a machine. \
+        For DRILLS: Returns the exact drop position (where items come out) and the tile where a belt should be placed. \
+        For FURNACES/ASSEMBLERS: Returns input_belt, input_inserter, output_belt, output_inserter positions. \
+        ALWAYS use this tool before routing belts to/from machines!")]
     async fn get_machine_belt_positions(&self, Parameters(params): Parameters<MachineBeltPositionsParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
@@ -641,6 +642,94 @@ impl FactorioMcp {
             Err(e) => return self.with_player_messages(format!("Error getting entity: {}", e)).await,
         };
 
+        // Check if this is a mining drill - they have special drop position handling
+        let is_drill = entity.name.contains("mining-drill");
+
+        if is_drill {
+            // For drills, query the actual drop_position from Factorio
+            let lua = format!(
+                r#"
+                local e = game.get_entity_by_unit_number({})
+                if e and e.valid and e.drop_position then
+                    local dp = e.drop_position
+                    local dir = e.direction
+                    -- Calculate belt direction based on drill facing
+                    -- Drill faces a direction, belt should run perpendicular or away
+                    local belt_dir = dir  -- Belt runs in same direction as drill faces
+                    rcon.print(game.table_to_json({{
+                        drop_x = dp.x,
+                        drop_y = dp.y,
+                        drill_direction = dir,
+                        belt_direction = belt_dir
+                    }}))
+                else
+                    rcon.print(game.table_to_json({{error = "Entity not found or has no drop_position"}}))
+                end
+                "#,
+                params.unit_number
+            );
+
+            let drop_result = match client.execute_lua(&lua).await {
+                Ok(r) => r,
+                Err(e) => return self.with_player_messages(format!("Error querying drop position: {}", e)).await,
+            };
+
+            // Parse the drop position result
+            if let Ok(drop_info) = serde_json::from_str::<serde_json::Value>(&drop_result) {
+                if let Some(error) = drop_info.get("error") {
+                    return self.with_player_messages(format!("Error: {}", error)).await;
+                }
+
+                let drop_x = drop_info["drop_x"].as_f64().unwrap_or(0.0);
+                let drop_y = drop_info["drop_y"].as_f64().unwrap_or(0.0);
+                let drill_dir = drop_info["drill_direction"].as_u64().unwrap_or(0) as u8;
+
+                // Calculate the tile where a belt should be placed
+                // Items drop at a position, belt tile is floor of that position
+                let belt_tile_x = drop_x.floor() as i32;
+                let belt_tile_y = drop_y.floor() as i32;
+
+                // Belt direction should carry items away from drill
+                // Drill direction: 0=N, 4=E, 8=S, 12=W
+                // If drill faces East, belt should go East (or turn)
+                let belt_direction = drill_dir;
+                let dir_name = match drill_dir {
+                    0 => "North",
+                    4 => "East",
+                    8 => "South",
+                    12 => "West",
+                    _ => "Unknown",
+                };
+
+                let result = serde_json::json!({
+                    "entity_type": "mining-drill",
+                    "drill": {
+                        "unit_number": entity.unit_number,
+                        "name": entity.name,
+                        "position": { "x": entity.position.x, "y": entity.position.y },
+                        "facing": dir_name,
+                        "direction": drill_dir
+                    },
+                    "output": {
+                        "drop_position": { "x": drop_x, "y": drop_y },
+                        "belt_tile": { "x": belt_tile_x, "y": belt_tile_y },
+                        "belt_direction": belt_direction,
+                        "description": format!(
+                            "Place belt at tile ({}, {}) facing {} (direction={}) to catch drill output",
+                            belt_tile_x, belt_tile_y, dir_name, belt_direction
+                        )
+                    },
+                    "routing_tip": format!(
+                        "To connect this drill: route_belt from_x={} from_y={} to_x=<destination> to_y=<destination>",
+                        belt_tile_x, belt_tile_y
+                    )
+                });
+
+                return self.with_player_messages(serde_json::to_string_pretty(&result).unwrap_or_default()).await;
+            }
+        }
+
+        // For non-drill machines (furnaces, assemblers, etc.)
         // Calculate machine size from bounding box or use defaults
         let (width, height) = if let Some(bb) = &entity.bounding_box {
             let w = (bb.right_bottom.x - bb.left_top.x).round() as i32;
@@ -650,7 +739,6 @@ impl FactorioMcp {
             // Default sizes for common machines
             match entity.name.as_str() {
                 "stone-furnace" | "steel-furnace" | "electric-furnace" => (2, 2),
-                "burner-mining-drill" | "electric-mining-drill" => (2, 2),
                 "assembling-machine-1" | "assembling-machine-2" | "assembling-machine-3" => (3, 3),
                 "chemical-plant" => (3, 3),
                 "oil-refinery" => (5, 5),
@@ -664,18 +752,21 @@ impl FactorioMcp {
 
         // Calculate positions based on machine size
         // For a 2x2 machine centered at (cx, cy):
-        //   - South edge is at cy + 1 (machine occupies cy to cy+1)
-        //   - North edge is at cy - 1
-        // Input belt goes 2 tiles south of center (1 for machine edge + 1 for inserter)
-        // Output belt goes 2 tiles north of center
+        //   - Machine occupies tiles from (cx, cy) to (cx+1, cy+1)
+        //   - South edge is at cy + height/2
+        //   - North edge is at cy - height/2
         let half_h = height / 2;
 
-        let input_belt_y = cy + half_h + 1;      // 1 tile gap for inserter
-        let input_inserter_y = cy + half_h;      // Adjacent to machine south edge
-        let output_belt_y = cy - half_h - 2;     // 1 tile gap for inserter
-        let output_inserter_y = cy - half_h - 1; // Adjacent to machine north edge
+        // Input belt goes 1 tile beyond south edge (for inserter gap)
+        let input_belt_y = cy + half_h + 1;
+        let input_inserter_y = cy + half_h;  // On the south edge tile
+
+        // Output belt goes 1 tile beyond north edge (for inserter gap)
+        let output_belt_y = cy - half_h - 1;
+        let output_inserter_y = cy - half_h;  // On the north edge tile (adjusted from -1)
 
         let result = serde_json::json!({
+            "entity_type": "machine",
             "machine": {
                 "unit_number": entity.unit_number,
                 "name": entity.name,
@@ -683,18 +774,27 @@ impl FactorioMcp {
                 "size": { "width": width, "height": height }
             },
             "input": {
-                "belt_y": input_belt_y,
-                "inserter_y": input_inserter_y,
-                "inserter_direction": 8,  // South: picks from North (belt), drops to South (machine)
-                "description": format!("Place belt at y={}, inserter at y={} facing South (direction=8)", input_belt_y, input_inserter_y)
+                "belt_tile_y": input_belt_y,
+                "inserter_tile_y": input_inserter_y,
+                "inserter_direction": "south",  // Faces south to pick from belt, drops north to machine
+                "description": format!(
+                    "Place input belt at y={}, inserter at y={} facing south to pick from belt",
+                    input_belt_y, input_inserter_y
+                )
             },
             "output": {
-                "belt_y": output_belt_y,
-                "inserter_y": output_inserter_y,
-                "inserter_direction": 0,  // North: picks from South (machine), drops to North (belt)
-                "description": format!("Place belt at y={}, inserter at y={} facing North (direction=0)", output_belt_y, output_inserter_y)
+                "belt_tile_y": output_belt_y,
+                "inserter_tile_y": output_inserter_y,
+                "inserter_direction": "south",  // Faces south to pick from machine, drops north to belt
+                "description": format!(
+                    "Place output belt at y={}, inserter at y={} facing south to pick from machine",
+                    output_belt_y, output_inserter_y
+                )
             },
-            "note": "For a row of machines at the same Y, run belts horizontally at the belt_y positions"
+            "routing_tip": format!(
+                "For a row of furnaces at y={}: route input belt to y={}, route output belt to y={}",
+                cy, input_belt_y, output_belt_y
+            )
         });
 
         self.with_player_messages(serde_json::to_string_pretty(&result).unwrap_or_default()).await
@@ -958,7 +1058,17 @@ impl FactorioMcp {
         };
 
         let position = Position::new(params.x, params.y);
-        let direction = Direction::from_factorio(params.direction);
+        let direction = if params.direction.is_empty() {
+            Direction::North
+        } else {
+            match Direction::parse(&params.direction) {
+                Some(d) => d,
+                None => return self.with_player_messages(format!(
+                    "Invalid direction '{}'. Use: north/n, east/e, south/s, west/w (or 0/4/8/12)",
+                    params.direction
+                )).await,
+            }
+        };
 
         let result = match client.place_entity(&params.entity_name, position, direction).await {
             Ok(r) => serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e)),

@@ -28,10 +28,11 @@ fn analyze_single_inserter(
     let position = inserter.position.to_tile();
     let direction = Direction::from_factorio(inserter.direction);
 
-    // Standard inserters pick up from behind and drop in front
-    // The direction is where the inserter ARM points (where it drops)
-    let dropoff_position = position.offset_in_direction(direction);
-    let pickup_position = position.offset_in_direction(direction.opposite());
+    // Standard inserters FACE a direction (where they PICK from)
+    // and DROP items to the OPPOSITE direction
+    // direction = pickup direction, opposite = dropoff direction
+    let pickup_position = position.offset_in_direction(direction);
+    let dropoff_position = position.offset_in_direction(direction.opposite());
 
     // Check for long inserter (picks up 2 tiles away)
     let is_long = inserter.name.contains("long");

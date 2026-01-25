@@ -168,7 +168,46 @@ route_belt from_x=0 from_y=0 to_x=10 to_y=0 allow_underground=true
 - Router automatically chooses optimal mix of surface/underground
 - Underground belts are placed as matching entry/exit pairs
 
-### Belt and Furnace Setup Patterns
+### Connecting Drills to Furnaces (CRITICAL)
+
+**ALWAYS use `get_machine_belt_positions` before routing belts!** This tool returns the exact
+positions needed - never guess based on entity center coordinates.
+
+#### Workflow:
+```
+1. get_machine_belt_positions unit_number=<drill_unit>
+   -> Returns: belt_tile: {x: 58, y: -22}  (where items actually drop!)
+
+2. get_machine_belt_positions unit_number=<furnace_unit>
+   -> Returns: input belt_tile_y: -13, output belt_tile_y: -17
+
+3. route_belt from_x=58 from_y=-22 to_x=68 to_y=-13  (drill output to furnace input)
+
+4. Place inserters at the positions returned by the tool
+```
+
+#### WHY THIS MATTERS:
+- Drill output position depends on facing direction and is NOT at the drill's center
+- A drill at (57, -21) facing East outputs at approximately (58, -22)
+- Guessing positions leads to belts that don't catch items!
+
+#### Direction Reference:
+| Direction | Shorthand | Numeric | Inserter Behavior |
+|-----------|-----------|---------|-------------------|
+| "north" | "n" | 0 | Picks from North, drops to South |
+| "east" | "e" | 4 | Picks from East, drops to West |
+| "south" | "s" | 8 | Picks from South, drops to North |
+| "west" | "w" | 12 | Picks from West, drops to East |
+
+**Prefer strings:** Use `direction: "south"` instead of `direction: 8` for clarity.
+
+**Mental model for inserters:**
+- The direction = where the inserter FACES/PICKS from
+- It drops items to the OPPOSITE direction
+- **INPUT inserters** (belt → machine): Point AWAY from machine, towards belt
+- **OUTPUT inserters** (machine → belt): Point TOWARDS machine to pick from it
+
+### Belt and Furnace Layout Patterns
 
 **IMPORTANT:** `route_belt` creates point-to-point belt connections. For furnace arrays,
 you need belts running PARALLEL to furnaces with inserters bridging the gap.
@@ -183,25 +222,21 @@ Input Belt    Inserters    Furnaces    Inserters    Output Belt
 
 #### Step-by-step:
 1. Place furnaces in a column (e.g., at x=10)
-2. Route INPUT belt NEXT TO furnaces (e.g., x=8), not through them
-3. Place inserters facing toward furnaces (direction=4 for East)
-4. Route OUTPUT belt on other side (e.g., x=12)
-5. Place output inserters facing away from furnaces (direction=4 for East)
+2. Use `get_machine_belt_positions` to find correct belt positions
+3. Route INPUT belt to the position returned (not at furnace center!)
+4. Place inserters at positions returned by the tool
+5. Route OUTPUT belt on other side
 
-#### Direction Reference:
-| Direction | Value | Inserter Behavior |
-|-----------|-------|-------------------|
-| North | 0 | Picks from South, drops to North |
-| East | 4 | Picks from West, drops to East |
-| South | 8 | Picks from North, drops to South |
-| West | 12 | Picks from East, drops to West |
-
-#### WRONG - Don't route INTO furnaces:
+#### WRONG - Don't guess positions:
 ```
-route_belt from_x=0 from_y=0 to_x=10 to_y=0  # Ends AT furnace position!
+route_belt from_x=0 from_y=0 to_x=10 to_y=-21  # Guessing based on drill center!
 ```
 
-Instead, route to a position BESIDE the furnace where inserters can reach.
+#### RIGHT - Use the tool:
+```
+get_machine_belt_positions unit_number=18  # Returns actual drop position
+route_belt from_x=58 from_y=-22 ...        # Use the returned coordinates
+```
 
 ### Extending Existing Belt Networks
 
