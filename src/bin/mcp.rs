@@ -671,10 +671,10 @@ impl FactorioMcp {
             if broadcast_config.flying_text {
                 let escaped = params.message.replace('\\', "\\\\").replace('"', "\\\"");
                 let lua = format!(
-                    r#"local p = game.players[1] if p and p.character and p.character.valid then \
-                    p.character.surface.create_entity{{name="flying-text", \
+                    r#"local p = game.players[1] if p and p.connected and p.character and p.character.valid then \
+                    p.create_local_flying_text{{text="{}", \
                     position={{p.character.position.x, p.character.position.y - 2}}, \
-                    text="{}", color={{r=0.8,g=0.8,b=1}}}} end"#,
+                    color={{r=0.8,g=0.8,b=1}}}} end"#,
                     escaped
                 );
                 if let Err(e) = client.execute_lua(&lua).await {
