@@ -6,7 +6,8 @@
 # 2. Creates a test map (if needed)
 # 3. Starts a headless Factorio server
 #
-# Usage: ./tests/setup.sh
+# Usage: ./tests/setup.sh [save_path]
+#        SAVE_PATH=saves/mymap.zip ./tests/setup.sh
 
 set -e
 
@@ -14,11 +15,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
-# Configuration
-SAVE_NAME="test_map"
-RCON_PORT=27016
-RCON_PASSWORD="test_password"
-GAME_PORT=34197
+# Configuration (can be overridden via environment variables)
+SAVE_NAME="${SAVE_NAME:-test_map}"
+RCON_PORT="${RCON_PORT:-27016}"
+RCON_PASSWORD="${RCON_PASSWORD:-test_password}"
+GAME_PORT="${GAME_PORT:-34197}"
+
+# Allow save path via argument or environment variable
+if [ -n "$1" ]; then
+    SAVE_PATH="$1"
+fi
 
 # Use separate data directory so headless server doesn't conflict with Steam client
 SERVER_DATA_DIR="$PROJECT_ROOT/.factorio-server"
@@ -32,20 +38,34 @@ cargo build --release --quiet
 echo "  Built: ./target/release/factorioctl"
 echo ""
 
-# Step 2: Create test map if needed
-SAVE_PATH="$PROJECT_ROOT/saves/${SAVE_NAME}.zip"
-if [ ! -f "$SAVE_PATH" ]; then
-    echo "Creating test map..."
-    python3 scripts/create_map.py --name "$SAVE_NAME" --config configs/test-map-gen.json
-    echo "  Created: $SAVE_PATH"
+# Step 2: Resolve save path
+if [ -z "$SAVE_PATH" ]; then
+    # No save path provided, use default test map
+    SAVE_PATH="$PROJECT_ROOT/saves/${SAVE_NAME}.zip"
+    if [ ! -f "$SAVE_PATH" ]; then
+        echo "Creating test map..."
+        python3 scripts/create_map.py --name "$SAVE_NAME" --config configs/test-map-gen.json
+        echo "  Created: $SAVE_PATH"
+    else
+        echo "Using existing test map: $SAVE_PATH"
+    fi
 else
-    echo "Using existing test map: $SAVE_PATH"
+    # Convert relative path to absolute if needed
+    if [[ "$SAVE_PATH" != /* ]]; then
+        SAVE_PATH="$PROJECT_ROOT/$SAVE_PATH"
+    fi
+    if [ ! -f "$SAVE_PATH" ]; then
+        echo "ERROR: Save file not found: $SAVE_PATH"
+        exit 1
+    fi
+    echo "Using provided save: $SAVE_PATH"
 fi
 echo ""
 
 # Step 3: Check if server is already running
-if pgrep -f "factorio.*--start-server.*${SAVE_NAME}" > /dev/null; then
-    echo "Server already running. Stop it with: ./tests/cleanup.sh"
+SAVE_BASENAME="$(basename "$SAVE_PATH")"
+if pgrep -f "factorio.*--start-server.*${SAVE_BASENAME}" > /dev/null; then
+    echo "Server already running with this save. Stop it with: ./tests/cleanup.sh"
     exit 1
 fi
 
