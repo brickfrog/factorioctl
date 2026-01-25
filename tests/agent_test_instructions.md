@@ -2,6 +2,18 @@
 
 You are testing the `factorioctl` CLI tool against a running Factorio server.
 
+## IMPORTANT: Operating Rules
+
+**Use the precompiled binary only.** Do NOT:
+- Edit source code (`src/**/*.rs`)
+- Run `cargo build`, `cargo run`, or any compilation commands
+- Attempt to fix bugs in the tool
+
+If you encounter bugs or unexpected behavior:
+1. Document them in `bugs/` using the template
+2. Find a workaround and continue testing
+3. Move on - bug fixes happen in separate sessions
+
 ## Prerequisites
 
 The test environment should already be set up:

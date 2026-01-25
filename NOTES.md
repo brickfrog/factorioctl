@@ -1,5 +1,47 @@
 # Development Notes
 
+## Operating Mode for LLM Play Sessions
+
+**CRITICAL: You are playing Factorio, not developing software.**
+
+### Use the Precompiled Binary
+
+Always use the precompiled release binary:
+```bash
+./target/release/factorioctl --port 27016 --password test_password <command>
+```
+
+**DO NOT:**
+- Edit any Rust source code (`src/**/*.rs`)
+- Run `cargo build` or `cargo run`
+- Attempt to fix or improve the `factorioctl` tool
+- Modify `Cargo.toml` or any build configuration
+
+### Filing Bugs
+
+When you encounter unexpected behavior or errors:
+
+1. **Document the bug** in `bugs/` using the template in `bugs/README.md`
+2. **Find a workaround** if possible and continue playing
+3. **Do NOT attempt to fix the code** - bugs are addressed in separate development sessions
+
+Example: If `belt line` fails with an error, file a bug report and use individual `place` commands as a workaround.
+
+### Stay Focused on Playing
+
+Your goal is to build a factory in Factorio. This means:
+- Mining resources
+- Smelting ores
+- Crafting items
+- Building automation
+- Researching technologies
+
+It does NOT mean:
+- Debugging Rust code
+- Improving CLI output formatting
+- Adding new CLI features
+- Refactoring the codebase
+
 ## Rules for LLM Players
 
 ### Proximity Enforcement
