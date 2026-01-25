@@ -39,7 +39,7 @@ impl FactorioClient {
             .unwrap_or(false);
 
         // Send warmup command (first command after connection may get dropped)
-        let _ = rcon.execute("/c").await;
+        let _ = rcon.execute("/silent-command").await;
 
         Ok(Self { rcon, debug_commands })
     }
