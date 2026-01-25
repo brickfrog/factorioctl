@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Direction, Position};
+use super::{Area, Direction, Position};
 
 /// A Factorio entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +32,10 @@ pub struct Entity {
     /// Force/team this entity belongs to
     #[serde(default)]
     pub force: Option<String>,
+
+    /// Collision bounding box in world coordinates
+    #[serde(default)]
+    pub bounding_box: Option<Area>,
 }
 
 impl Entity {

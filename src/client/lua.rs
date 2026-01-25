@@ -46,6 +46,7 @@ rcon.print(helpers.table_to_json(result))
 local result = {{}}
 local entities = game.surfaces[1].find_entities_filtered{{{}}}
 for _, e in pairs(entities) do
+    local bb = e.bounding_box
     table.insert(result, {{
         unit_number = e.unit_number,
         name = e.name,
@@ -53,7 +54,11 @@ for _, e in pairs(entities) do
         position = {{ x = e.position.x, y = e.position.y }},
         direction = e.direction,
         health = e.health,
-        force = e.force.name
+        force = e.force.name,
+        bounding_box = {{
+            left_top = {{ x = bb.left_top.x, y = bb.left_top.y }},
+            right_bottom = {{ x = bb.right_bottom.x, y = bb.right_bottom.y }}
+        }}
     }})
 end
 rcon.print(helpers.table_to_json(result))

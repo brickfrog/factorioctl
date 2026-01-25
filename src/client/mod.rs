@@ -197,12 +197,26 @@ impl FactorioClient {
                 continue;
             }
 
-            // Add entity footprint as blocked
-            let padding = entity_collision_padding(&entity.name);
-            let center = GridPos::from_position(&entity.position);
-            for dx in -padding..=padding {
-                for dy in -padding..=padding {
-                    collision_map.block(GridPos::new(center.x + dx, center.y + dy));
+            // Use actual bounding box if available, otherwise fall back to padding
+            if let Some(bb) = &entity.bounding_box {
+                // Block all tiles covered by the bounding box
+                let min_x = bb.left_top.x.floor() as i32;
+                let max_x = bb.right_bottom.x.ceil() as i32;
+                let min_y = bb.left_top.y.floor() as i32;
+                let max_y = bb.right_bottom.y.ceil() as i32;
+                for x in min_x..max_x {
+                    for y in min_y..max_y {
+                        collision_map.block(GridPos::new(x, y));
+                    }
+                }
+            } else {
+                // Fallback: use hardcoded padding
+                let padding = entity_collision_padding(&entity.name);
+                let center = GridPos::from_position(&entity.position);
+                for dx in -padding..=padding {
+                    for dy in -padding..=padding {
+                        collision_map.block(GridPos::new(center.x + dx, center.y + dy));
+                    }
                 }
             }
         }

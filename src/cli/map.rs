@@ -109,6 +109,16 @@ fn entity_char(entity: &Entity, detail: DetailLevel) -> Option<char> {
         }
     }
 
+    // Crash site / spaceship wrecks (check early - they have type "container")
+    if name.starts_with("crash-site") {
+        return Some('X');
+    }
+
+    // Rocks (check early - obstacles)
+    if name.contains("rock") {
+        return Some('o');
+    }
+
     // Resources
     if entity_type == "resource" {
         return match name {
@@ -197,11 +207,6 @@ fn entity_char(entity: &Entity, detail: DetailLevel) -> Option<char> {
         return Some('L');
     }
 
-    // Rocks
-    if name.contains("rock") {
-        return Some('o');
-    }
-
     // Default - show first letter
     Some(name.chars().next().unwrap_or('?'))
 }
@@ -237,14 +242,39 @@ fn render_ascii_map(
     let mut position_entities: HashMap<(i32, i32), Vec<&Entity>> = HashMap::new();
 
     for entity in entities {
-        let grid_x = (entity.position.x - center.x).round() as i32 + r;
-        let grid_y = (entity.position.y - center.y).round() as i32 + r;
+        // Use bounding box if available for large entities, otherwise use center position
+        if let Some(bb) = &entity.bounding_box {
+            // For large entities, add to all tiles covered by bounding box
+            let min_x = bb.left_top.x.floor() as i32;
+            let max_x = bb.right_bottom.x.ceil() as i32;
+            let min_y = bb.left_top.y.floor() as i32;
+            let max_y = bb.right_bottom.y.ceil() as i32;
 
-        if grid_x >= 0 && grid_x < width as i32 && grid_y >= 0 && grid_y < height as i32 {
-            position_entities
-                .entry((grid_x, grid_y))
-                .or_default()
-                .push(entity);
+            for world_x in min_x..max_x {
+                for world_y in min_y..max_y {
+                    let grid_x = world_x - center.x as i32 + r;
+                    let grid_y = world_y - center.y as i32 + r;
+
+                    if grid_x >= 0 && grid_x < width as i32 && grid_y >= 0 && grid_y < height as i32
+                    {
+                        position_entities
+                            .entry((grid_x, grid_y))
+                            .or_default()
+                            .push(entity);
+                    }
+                }
+            }
+        } else {
+            // Fallback to center position only
+            let grid_x = (entity.position.x - center.x).round() as i32 + r;
+            let grid_y = (entity.position.y - center.y).round() as i32 + r;
+
+            if grid_x >= 0 && grid_x < width as i32 && grid_y >= 0 && grid_y < height as i32 {
+                position_entities
+                    .entry((grid_x, grid_y))
+                    .or_default()
+                    .push(entity);
+            }
         }
     }
 
@@ -289,7 +319,7 @@ fn render_ascii_map(
 
     // Legend
     output.push_str("Legend: @=you ^v<>=belt D=drill F=furnace i=inserter\n");
-    output.push_str("        I=iron C=copper c=coal S=stone B=chest\n\n");
+    output.push_str("        I=iron C=copper c=coal S=stone B=chest X=obstacle o=rock\n\n");
 
     // X-axis labels (every 5 tiles)
     output.push_str("    ");
