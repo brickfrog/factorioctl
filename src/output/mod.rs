@@ -216,10 +216,17 @@ impl Outputable for crate::world::CraftResult {
                 self.error.as_deref().unwrap_or("unknown error")
             );
         }
-        format!(
+        let mut output = format!(
             "Queued {} items for crafting (queue size: {})",
             self.queued, self.queue_size
-        )
+        );
+        if !self.queue.is_empty() {
+            output.push_str("\nCrafting queue:");
+            for item in &self.queue {
+                output.push_str(&format!("\n  {} x{}", item.recipe, item.count));
+            }
+        }
+        output
     }
 }
 

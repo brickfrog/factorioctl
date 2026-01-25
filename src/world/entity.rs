@@ -87,6 +87,16 @@ pub struct MineResult {
     pub inventory: Vec<InventoryItem>,
 }
 
+/// An item in the crafting queue
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CraftQueueItem {
+    /// Recipe name
+    pub recipe: String,
+
+    /// Count being crafted
+    pub count: u32,
+}
+
 /// Result of a crafting operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CraftResult {
@@ -100,6 +110,10 @@ pub struct CraftResult {
     /// Current crafting queue size
     #[serde(default)]
     pub queue_size: u32,
+
+    /// Full crafting queue (includes auto-queued intermediates)
+    #[serde(default)]
+    pub queue: Vec<CraftQueueItem>,
 
     /// Error message if failed
     #[serde(default)]

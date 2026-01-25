@@ -611,17 +611,29 @@ rcon.print(helpers.table_to_json({{
     pub fn craft(recipe: &str, count: u32) -> String {
         format!(
             r#"
-if not global then global = {{}} end local c = global.factorioctl_character
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {{}} end c = global.factorioctl_character end
 if not (c and c.valid) then
     rcon.print('{{"success": false, "error": "No character"}}')
     return
 end
 
 local crafted = c.begin_crafting{{ recipe = "{}", count = {} }}
+
+-- Build queue info
+local queue = {{}}
+for i, item in pairs(c.crafting_queue) do
+    table.insert(queue, {{ recipe = item.recipe, count = item.count }})
+end
+
 rcon.print(helpers.table_to_json({{
     success = crafted > 0,
     queued = crafted,
-    queue_size = c.crafting_queue_size
+    queue_size = c.crafting_queue_size,
+    queue = queue
 }}))
 "#,
             recipe, count
@@ -633,7 +645,11 @@ rcon.print(helpers.table_to_json({{
     /// Wait for crafting to complete (poll-based, handled in client)
     pub fn wait_for_crafting() -> String {
         r#"
-if not global then global = {} end local c = global.factorioctl_character
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {} end c = global.factorioctl_character end
 if c and c.valid then
     rcon.print(tostring(c.crafting_queue_size))
 else
