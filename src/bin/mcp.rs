@@ -179,6 +179,20 @@ pub struct InsertItemsParams {
 
 fn default_inventory_type() -> String { "chest".to_string() }
 
+/// Parameters for extract_items tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ExtractItemsParams {
+    /// Source entity unit number
+    pub unit_number: u32,
+    /// Item name to extract
+    pub item: String,
+    /// Number of items to extract
+    pub count: u32,
+    /// Inventory type (e.g., 'chest', 'fuel', 'furnace_result', 'output')
+    #[serde(default = "default_inventory_type")]
+    pub inventory_type: String,
+}
+
 /// Parameters for route_belt tool - routes belts from A to B using pathfinding
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct RouteBeltParams {
@@ -631,6 +645,21 @@ impl FactorioMcp {
 
         let result = match client.insert_items(params.unit_number, &params.item, params.count, &params.inventory_type).await {
             Ok(()) => format!("Inserted {} {} into entity", params.count, params.item),
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Extract items from an entity into player inventory.
+    #[tool(description = "Extract items from an entity (furnace, chest, etc) into character inventory.")]
+    async fn extract_items(&self, Parameters(params): Parameters<ExtractItemsParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let result = match client.extract_items(params.unit_number, &params.item, params.count, &params.inventory_type).await {
+            Ok(extracted) => format!("Extracted {} {} from entity", extracted, params.item),
             Err(e) => format!("Error: {}", e),
         };
         self.with_player_messages(result).await

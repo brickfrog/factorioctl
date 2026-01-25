@@ -11,6 +11,7 @@ pub mod clipboard;
 pub mod config;
 pub mod craft;
 pub mod exec;
+pub mod extract;
 pub mod gather;
 pub mod get;
 pub mod insert;
@@ -145,6 +146,9 @@ pub enum Commands {
 
     /// Insert items into entities
     Insert(insert::InsertCommand),
+
+    /// Extract items from entities
+    Extract(extract::ExtractCommand),
 
     /// Set recipe on assembling machines
     SetRecipe(set_recipe::SetRecipeCommand),

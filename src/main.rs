@@ -41,6 +41,7 @@ async fn main() -> Result<()> {
         Commands::Place(cmd) => cli::place::execute(cmd, &conn).await,
         Commands::Remove(cmd) => cli::remove::execute(cmd, &conn).await,
         Commands::Insert(cmd) => cli::insert::execute(cmd, &conn).await,
+        Commands::Extract(cmd) => cli::extract::execute(cmd, &conn).await,
         Commands::SetRecipe(cmd) => cli::set_recipe::execute(cmd, &conn).await,
         Commands::Tick(cmd) => cli::tick::execute(cmd, &conn).await,
         Commands::Exec(cmd) => cli::exec::execute(cmd, &conn).await,

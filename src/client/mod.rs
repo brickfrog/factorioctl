@@ -645,6 +645,34 @@ end
         Ok(())
     }
 
+    /// Extract items from an entity into player inventory
+    pub async fn extract_items(
+        &mut self,
+        unit_number: u32,
+        item: &str,
+        count: u32,
+        inventory_type: &str,
+    ) -> Result<u32> {
+        let lua = LuaCommand::extract_items(unit_number, item, count, inventory_type);
+        let response = self.execute_lua(&lua).await?;
+
+        #[derive(serde::Deserialize)]
+        struct ExtractResult {
+            extracted: Option<u32>,
+            #[allow(dead_code)]
+            available: Option<u32>,
+            error: Option<String>,
+        }
+
+        let result: ExtractResult = serde_json::from_str(&response)?;
+        if let Some(err) = result.error {
+            if result.extracted.unwrap_or(0) == 0 {
+                anyhow::bail!(err);
+            }
+        }
+        Ok(result.extracted.unwrap_or(0))
+    }
+
     /// Set recipe on an assembling machine
     pub async fn set_recipe(&mut self, unit_number: u32, recipe: &str) -> Result<()> {
         let lua = LuaCommand::set_recipe(unit_number, recipe);

@@ -1047,6 +1047,79 @@ rcon.print(helpers.table_to_json({{ inserted = inserted }}))
         .to_string()
     }
 
+    /// Extract items from an entity's inventory into the player's inventory
+    pub fn extract_items(unit_number: u32, item: &str, count: u32, inventory_type: &str) -> String {
+        let inv_define = match inventory_type {
+            "fuel" => "defines.inventory.fuel",
+            "input" => "defines.inventory.assembling_machine_input",
+            "output" => "defines.inventory.assembling_machine_output",
+            "chest" => "defines.inventory.chest",
+            "furnace_source" => "defines.inventory.furnace_source",
+            "furnace_result" => "defines.inventory.furnace_result",
+            _ => "defines.inventory.chest",
+        };
+
+        format!(
+            r#"
+-- Find entity by unit_number via search
+local e = nil
+for _, entity in pairs(game.surfaces[1].find_entities_filtered{{area={{{{-500,-500}},{{500,500}}}}}}) do
+    if entity.unit_number == {} then
+        e = entity
+        break
+    end
+end
+if not e then
+    rcon.print('{{"error": "Entity not found"}}')
+    return
+end
+
+local inv = e.get_inventory({})
+if not inv then
+    rcon.print('{{"error": "Entity has no such inventory"}}')
+    return
+end
+
+local player = game.players[1]
+if not player or not player.character then
+    rcon.print('{{"error": "No player character found"}}')
+    return
+end
+
+local player_inv = player.get_main_inventory()
+if not player_inv then
+    rcon.print('{{"error": "Player has no inventory"}}')
+    return
+end
+
+-- Check how many items are available
+local available = inv.get_item_count("{}")
+local to_extract = math.min({}, available)
+
+if to_extract == 0 then
+    rcon.print('{{"extracted": 0, "error": "No items of that type in inventory"}}')
+    return
+end
+
+-- Remove from entity inventory
+local removed = inv.remove{{ name = "{}", count = to_extract }}
+
+-- Insert into player inventory
+local inserted = player_inv.insert{{ name = "{}", count = removed }}
+
+-- If we couldn't insert all, put the remainder back
+if inserted < removed then
+    inv.insert{{ name = "{}", count = removed - inserted }}
+end
+
+rcon.print(helpers.table_to_json({{ extracted = inserted, available = available }}))
+"#,
+            unit_number, inv_define, item, count, item, item, item
+        )
+        .trim()
+        .to_string()
+    }
+
     /// Set recipe on an assembling machine
     pub fn set_recipe(unit_number: u32, recipe: &str) -> String {
         format!(
