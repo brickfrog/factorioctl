@@ -2136,4 +2136,116 @@ rcon.print(helpers.table_to_json(result))
         .trim()
         .to_string()
     }
+
+    /// Clear trees and rocks in an area by mining them (player gets the items)
+    /// Returns the count of cleared entities and items gained
+    /// Requires player to be within proximity of the area
+    pub fn clear_area(area: Area, clear_trees: bool, clear_rocks: bool, dry_run: bool) -> String {
+        let trees_filter = if clear_trees { "true" } else { "false" };
+        let rocks_filter = if clear_rocks { "true" } else { "false" };
+        let dry_run_str = if dry_run { "true" } else { "false" };
+
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local area = {{{{{},{}}},{{{},{}}}}}
+local clear_trees = {}
+local clear_rocks = {}
+local dry_run = {}
+local max_distance = 30 -- Must be within 30 tiles of the area center
+
+-- Find character
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {{}} end c = global.factorioctl_character end
+
+local result = {{
+    trees_found = 0,
+    rocks_found = 0,
+    trees_mined = 0,
+    rocks_mined = 0,
+    dry_run = dry_run,
+    too_far = false,
+    items_gained = {{}}
+}}
+
+if not (c and c.valid) then
+    result.error = "No character found"
+    rcon.print(helpers.table_to_json(result))
+    return
+end
+
+-- Check proximity to area center
+local cx, cy = c.position.x, c.position.y
+local area_center_x = (area[1][1] + area[2][1]) / 2
+local area_center_y = (area[1][2] + area[2][2]) / 2
+local dx = cx - area_center_x
+local dy = cy - area_center_y
+local dist = math.sqrt(dx*dx + dy*dy)
+
+if dist > max_distance and not dry_run then
+    result.too_far = true
+    result.distance = dist
+    result.max_distance = max_distance
+    rcon.print(helpers.table_to_json(result))
+    return
+end
+
+-- Count inventory before mining
+local inv = c.get_main_inventory()
+local before = {{}}
+if inv then
+    for _, item in pairs(inv.get_contents()) do
+        before[item.name] = item.count
+    end
+end
+
+-- Find and mine trees
+if clear_trees then
+    local trees = surface.find_entities_filtered{{ type = "tree", area = area }}
+    result.trees_found = #trees
+    if not dry_run then
+        for _, tree in pairs(trees) do
+            if c.mine_entity(tree, true) then
+                result.trees_mined = result.trees_mined + 1
+            end
+        end
+    end
+end
+
+-- Find and mine rocks (simple-entity with rock in name)
+if clear_rocks then
+    local entities = surface.find_entities_filtered{{ type = "simple-entity", area = area }}
+    for _, e in pairs(entities) do
+        if e.name:find("rock") then
+            result.rocks_found = result.rocks_found + 1
+            if not dry_run then
+                if c.mine_entity(e, true) then
+                    result.rocks_mined = result.rocks_mined + 1
+                end
+            end
+        end
+    end
+end
+
+-- Count inventory after and calculate gained items
+if not dry_run and inv then
+    for _, item in pairs(inv.get_contents()) do
+        local gained = item.count - (before[item.name] or 0)
+        if gained > 0 then
+            table.insert(result.items_gained, {{ name = item.name, count = gained }})
+        end
+    end
+end
+
+rcon.print(helpers.table_to_json(result))
+"#,
+            area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y,
+            trees_filter, rocks_filter, dry_run_str
+        )
+        .trim()
+        .to_string()
+    }
 }

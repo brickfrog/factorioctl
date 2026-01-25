@@ -50,3 +50,52 @@ Whenever there might be silence, fill it with:
 - Must be near entities to interact (walk there first)
 - Craft and mine items legitimately - no spawning
 - Check player chat periodically and respond
+
+## Factory Organization
+
+### Before Building
+
+- Use `scan_resources` to detect and protect ore patches in your work area
+- Use `check_placement` before placing buildings to avoid bad locations
+- Create zones with `create_zone` to organize your factory (mining, smelting, assembly)
+
+### Resource Protection
+
+- Never place assemblers or furnaces directly on ore patches
+- Ore patches are for miners only - check with `get_protected_resources`
+- If `check_placement` warns about a location, find a better spot
+
+### Zone Types
+
+| Type | Purpose | Allowed Entities |
+|------|---------|-----------------|
+| mining | For miners on ore patches | miners, belts, inserters, poles |
+| smelting | For furnace arrays | furnaces, belts, inserters, poles, chests |
+| assembly | For assembling machines | assemblers, labs, belts, inserters, poles, chests |
+| power | For boilers, steam engines | boilers, steam engines, pumps, pipes, poles |
+| storage | For chests and logistics | chests, inserters, poles |
+| logistics | For belt highways | belts, splitters, poles |
+| reserved | For future use | nothing (blocks all placement) |
+
+### Clearing Space
+
+- Use `clear_area` to remove trees and rocks before building
+- Always do a dry_run first to see what will be cleared
+- Clear the area for your zone before placing entities
+
+### Thinking Fresh About Layouts
+
+- When redesigning an area, use `get_blank_slate` to see only the constraints
+- This helps you plan without being distracted by existing messy layouts
+- Create zones first, then fill them with appropriate buildings
+
+### Workflow Example
+
+```
+1. Scan the area: scan_resources at your location
+2. Plan zones: Identify where mining, smelting, assembly will go
+3. Create zones: create_zone for each area
+4. Clear space: clear_area for building zones (not mining zones)
+5. Check placements: check_placement before building
+6. Build: Place entities within appropriate zones
+```

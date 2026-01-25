@@ -18,6 +18,7 @@ use factorioctl::analyze::{
     trace_belt_sources, BeltGraph,
 };
 use factorioctl::client::FactorioClient;
+use factorioctl::memory::{AgentMemory, ProtectedResource, Zone, ZoneType};
 use factorioctl::world::{find_belt_route, Area, Direction, GridPos, Position, TilePos};
 
 /// Connection configuration loaded from environment or config
@@ -318,6 +319,154 @@ pub struct AlertsParams {
     #[serde(default = "default_radius")]
     pub radius: u32,
 }
+
+// === Zone Management Parameters ===
+
+/// Parameters for create_zone tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CreateZoneParams {
+    /// Unique ID for the zone
+    pub id: String,
+    /// Zone type: mining, smelting, assembly, power, storage, logistics, reserved, or custom:name
+    pub zone_type: String,
+    /// Left X coordinate of zone bounds
+    pub x1: f64,
+    /// Top Y coordinate of zone bounds
+    pub y1: f64,
+    /// Right X coordinate of zone bounds
+    pub x2: f64,
+    /// Bottom Y coordinate of zone bounds
+    pub y2: f64,
+    /// Optional description for the zone
+    pub description: Option<String>,
+}
+
+/// Parameters for get_zone tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetZoneParams {
+    /// Zone ID to retrieve
+    pub id: String,
+}
+
+/// Parameters for update_zone tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct UpdateZoneParams {
+    /// Zone ID to update
+    pub id: String,
+    /// New zone type (optional)
+    pub zone_type: Option<String>,
+    /// New left X coordinate (optional)
+    pub x1: Option<f64>,
+    /// New top Y coordinate (optional)
+    pub y1: Option<f64>,
+    /// New right X coordinate (optional)
+    pub x2: Option<f64>,
+    /// New bottom Y coordinate (optional)
+    pub y2: Option<f64>,
+    /// New description (optional)
+    pub description: Option<String>,
+}
+
+/// Parameters for delete_zone tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DeleteZoneParams {
+    /// Zone ID to delete
+    pub id: String,
+}
+
+/// Parameters for list_zones tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ListZonesParams {
+    /// Optional filter by zone type
+    pub zone_type: Option<String>,
+}
+
+// === Resource Protection Parameters ===
+
+/// Parameters for scan_resources tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ScanResourcesParams {
+    /// X coordinate of area center
+    pub x: i32,
+    /// Y coordinate of area center
+    pub y: i32,
+    /// Radius around center to scan
+    #[serde(default = "default_radius")]
+    pub radius: u32,
+    /// If true, save discovered resources as protected (default: true)
+    #[serde(default = "default_save_as_protected")]
+    pub save_as_protected: bool,
+}
+
+fn default_save_as_protected() -> bool { true }
+
+// === Layout Assistance Parameters ===
+
+/// Parameters for check_placement tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CheckPlacementParams {
+    /// Entity name to check (e.g., 'assembling-machine-1')
+    pub entity_name: String,
+    /// X coordinate to check
+    pub x: f64,
+    /// Y coordinate to check
+    pub y: f64,
+}
+
+/// Parameters for find_build_area tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct FindBuildAreaParams {
+    /// Zone type to find area for: mining, smelting, assembly, power, storage, logistics
+    pub zone_type: String,
+    /// Minimum width needed
+    pub width: u32,
+    /// Minimum height needed
+    pub height: u32,
+    /// X coordinate of search center
+    pub x: i32,
+    /// Y coordinate of search center
+    pub y: i32,
+    /// Maximum search radius
+    #[serde(default = "default_radius")]
+    pub radius: u32,
+}
+
+/// Parameters for get_blank_slate tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetBlankSlateParams {
+    /// X coordinate of area center
+    pub x: i32,
+    /// Y coordinate of area center
+    pub y: i32,
+    /// Radius around center
+    #[serde(default = "default_radius")]
+    pub radius: u32,
+}
+
+/// Parameters for clear_area tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ClearAreaParams {
+    /// Left X coordinate
+    pub x1: f64,
+    /// Top Y coordinate
+    pub y1: f64,
+    /// Right X coordinate
+    pub x2: f64,
+    /// Bottom Y coordinate
+    pub y2: f64,
+    /// Clear trees (default: true)
+    #[serde(default = "default_clear_trees")]
+    pub clear_trees: bool,
+    /// Clear rocks (default: true)
+    #[serde(default = "default_clear_rocks")]
+    pub clear_rocks: bool,
+    /// Dry run - preview without clearing (default: false)
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+fn default_clear_trees() -> bool { true }
+fn default_clear_rocks() -> bool { true }
 
 // === The MCP Server ===
 
@@ -1150,6 +1299,481 @@ end
             results.join(", ")
         };
         self.with_player_messages(result).await
+    }
+
+    // === Zone Management Tools ===
+
+    /// Create a zone to organize factory areas.
+    #[tool(description = "Create a named zone to organize your factory. \
+        Zones help track what areas are designated for (mining, smelting, assembly, etc.). \
+        Zone types: mining, smelting, assembly, power, storage, logistics, reserved, or custom:name")]
+    async fn create_zone(&self, Parameters(params): Parameters<CreateZoneParams>) -> String {
+        let mut memory = AgentMemory::load();
+
+        // Parse zone type
+        let zone_type = parse_zone_type(&params.zone_type);
+
+        let zone = Zone {
+            id: params.id.clone(),
+            zone_type,
+            bounds: Area::new(params.x1, params.y1, params.x2, params.y2),
+            description: params.description,
+            created_tick: 0, // Could get from game if connected
+        };
+
+        memory.set_zone(zone);
+
+        let result = match memory.save() {
+            Ok(()) => format!("Zone '{}' created successfully", params.id),
+            Err(e) => format!("Error saving zone: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// List all defined zones.
+    #[tool(description = "List all defined zones in agent memory. Optionally filter by zone type.")]
+    async fn list_zones(&self, Parameters(params): Parameters<ListZonesParams>) -> String {
+        let memory = AgentMemory::load();
+
+        let zones: Vec<serde_json::Value> = memory
+            .zones
+            .values()
+            .filter(|z| {
+                params.zone_type.as_ref().map_or(true, |t| {
+                    z.zone_type.to_string() == *t
+                })
+            })
+            .map(|z| {
+                serde_json::json!({
+                    "id": z.id,
+                    "zone_type": z.zone_type.to_string(),
+                    "bounds": {
+                        "x1": z.bounds.left_top.x,
+                        "y1": z.bounds.left_top.y,
+                        "x2": z.bounds.right_bottom.x,
+                        "y2": z.bounds.right_bottom.y
+                    },
+                    "description": z.description
+                })
+            })
+            .collect();
+
+        let result = serde_json::to_string_pretty(&zones).unwrap_or_else(|e| format!("Error: {}", e));
+        self.with_player_messages(result).await
+    }
+
+    /// Get details of a specific zone.
+    #[tool(description = "Get details of a specific zone by ID.")]
+    async fn get_zone(&self, Parameters(params): Parameters<GetZoneParams>) -> String {
+        let memory = AgentMemory::load();
+
+        let result = match memory.get_zone(&params.id) {
+            Some(z) => serde_json::to_string_pretty(&serde_json::json!({
+                "id": z.id,
+                "zone_type": z.zone_type.to_string(),
+                "bounds": {
+                    "x1": z.bounds.left_top.x,
+                    "y1": z.bounds.left_top.y,
+                    "x2": z.bounds.right_bottom.x,
+                    "y2": z.bounds.right_bottom.y
+                },
+                "description": z.description,
+                "allowed_entities": z.zone_type.allowed_entities()
+            })).unwrap_or_else(|e| format!("Error: {}", e)),
+            None => format!("Zone '{}' not found", params.id),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Update an existing zone.
+    #[tool(description = "Update an existing zone's properties (type, bounds, description).")]
+    async fn update_zone(&self, Parameters(params): Parameters<UpdateZoneParams>) -> String {
+        let mut memory = AgentMemory::load();
+
+        let result = match memory.zones.get_mut(&params.id) {
+            Some(zone) => {
+                if let Some(ref t) = params.zone_type {
+                    zone.zone_type = parse_zone_type(t);
+                }
+                if let Some(x1) = params.x1 {
+                    zone.bounds.left_top.x = x1;
+                }
+                if let Some(y1) = params.y1 {
+                    zone.bounds.left_top.y = y1;
+                }
+                if let Some(x2) = params.x2 {
+                    zone.bounds.right_bottom.x = x2;
+                }
+                if let Some(y2) = params.y2 {
+                    zone.bounds.right_bottom.y = y2;
+                }
+                if params.description.is_some() {
+                    zone.description = params.description.clone();
+                }
+
+                match memory.save() {
+                    Ok(()) => format!("Zone '{}' updated successfully", params.id),
+                    Err(e) => format!("Error saving: {}", e),
+                }
+            }
+            None => format!("Zone '{}' not found", params.id),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Delete a zone.
+    #[tool(description = "Delete a zone by ID.")]
+    async fn delete_zone(&self, Parameters(params): Parameters<DeleteZoneParams>) -> String {
+        let mut memory = AgentMemory::load();
+
+        let result = match memory.remove_zone(&params.id) {
+            Some(_) => match memory.save() {
+                Ok(()) => format!("Zone '{}' deleted", params.id),
+                Err(e) => format!("Error saving: {}", e),
+            },
+            None => format!("Zone '{}' not found", params.id),
+        };
+        self.with_player_messages(result).await
+    }
+
+    // === Resource Protection Tools ===
+
+    /// Scan for resources and optionally protect them.
+    #[tool(description = "Scan an area for resource patches (ore, oil) and save them as protected. \
+        Protected resources will generate warnings when you try to place non-mining buildings on them.")]
+    async fn scan_resources(&self, Parameters(params): Parameters<ScanResourcesParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let area = Area {
+            left_top: Position::new(params.x as f64 - params.radius as f64, params.y as f64 - params.radius as f64),
+            right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
+        };
+
+        let resources = match client.find_resources(area, None).await {
+            Ok(r) => r,
+            Err(e) => return self.with_player_messages(format!("Error scanning: {}", e)).await,
+        };
+
+        let mut memory = AgentMemory::load();
+        let mut saved_count = 0;
+
+        let info: Vec<serde_json::Value> = resources
+            .into_iter()
+            .map(|r| {
+                if params.save_as_protected {
+                    memory.add_protected_resource(ProtectedResource {
+                        resource_type: r.name.clone(),
+                        bounds: r.bounding_box,
+                        center: r.center,
+                        total_amount: r.total_amount as u64,
+                        tile_count: r.tile_count,
+                    });
+                    saved_count += 1;
+                }
+
+                serde_json::json!({
+                    "name": r.name,
+                    "center": { "x": r.center.x, "y": r.center.y },
+                    "total_amount": r.total_amount,
+                    "tile_count": r.tile_count,
+                    "bounds": {
+                        "x1": r.bounding_box.left_top.x,
+                        "y1": r.bounding_box.left_top.y,
+                        "x2": r.bounding_box.right_bottom.x,
+                        "y2": r.bounding_box.right_bottom.y
+                    }
+                })
+            })
+            .collect();
+
+        if params.save_as_protected {
+            if let Err(e) = memory.save() {
+                return self.with_player_messages(format!("Error saving memory: {}", e)).await;
+            }
+        }
+
+        let result = serde_json::json!({
+            "resources_found": info.len(),
+            "resources_saved": saved_count,
+            "resources": info
+        });
+
+        let result_str = serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e));
+        self.with_player_messages(result_str).await
+    }
+
+    /// Get all protected resources.
+    #[tool(description = "List all protected resource patches that have been saved. \
+        These are areas where only mining-related buildings should be placed.")]
+    async fn get_protected_resources(&self) -> String {
+        let memory = AgentMemory::load();
+
+        let resources: Vec<serde_json::Value> = memory
+            .protected_resources
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "resource_type": r.resource_type,
+                    "center": { "x": r.center.x, "y": r.center.y },
+                    "total_amount": r.total_amount,
+                    "tile_count": r.tile_count,
+                    "bounds": {
+                        "x1": r.bounds.left_top.x,
+                        "y1": r.bounds.left_top.y,
+                        "x2": r.bounds.right_bottom.x,
+                        "y2": r.bounds.right_bottom.y
+                    }
+                })
+            })
+            .collect();
+
+        let result = serde_json::to_string_pretty(&resources).unwrap_or_else(|e| format!("Error: {}", e));
+        self.with_player_messages(result).await
+    }
+
+    // === Layout Assistance Tools ===
+
+    /// Check if a placement is appropriate.
+    #[tool(description = "Check if placing an entity at a position is appropriate. \
+        Validates against zones and protected resources. Use this before placing buildings to avoid bad locations.")]
+    async fn check_placement(&self, Parameters(params): Parameters<CheckPlacementParams>) -> String {
+        let memory = AgentMemory::load();
+        let pos = Position::new(params.x, params.y);
+        let check = memory.check_placement(&params.entity_name, &pos);
+
+        let result = serde_json::json!({
+            "allowed": check.allowed,
+            "entity": params.entity_name,
+            "position": { "x": params.x, "y": params.y },
+            "warnings": check.warnings,
+            "errors": check.errors,
+            "overlapping_zones": check.overlapping_zones,
+            "overlapping_resources": check.overlapping_resources
+        });
+
+        let result_str = serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e));
+        self.with_player_messages(result_str).await
+    }
+
+    /// Find a suitable empty area for building.
+    #[tool(description = "Find a suitable empty area for a specific zone type. \
+        Searches for space that doesn't overlap with protected resources or existing zones.")]
+    async fn find_build_area(&self, Parameters(params): Parameters<FindBuildAreaParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let memory = AgentMemory::load();
+        let search_area = Area {
+            left_top: Position::new(params.x as f64 - params.radius as f64, params.y as f64 - params.radius as f64),
+            right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
+        };
+
+        // Get existing entities to avoid
+        let entities = match client.find_entities(search_area, None, None).await {
+            Ok(e) => e,
+            Err(e) => return self.with_player_messages(format!("Error getting entities: {}", e)).await,
+        };
+
+        // Build a simple occupancy grid
+        let width = params.width as i32;
+        let height = params.height as i32;
+
+        // Search in a spiral pattern from center
+        let center_x = params.x;
+        let center_y = params.y;
+
+        for dist in 0..params.radius as i32 {
+            for dx in -dist..=dist {
+                for dy in -dist..=dist {
+                    if dx.abs() != dist && dy.abs() != dist {
+                        continue; // Only check perimeter of this distance
+                    }
+
+                    let check_x = center_x + dx;
+                    let check_y = center_y + dy;
+
+                    // Check if this area is clear
+                    let candidate = Area::new(
+                        check_x as f64,
+                        check_y as f64,
+                        (check_x + width) as f64,
+                        (check_y + height) as f64,
+                    );
+
+                    // Check for entity overlap
+                    let has_entity = entities.iter().any(|e| {
+                        candidate.contains(&e.position)
+                    });
+
+                    if has_entity {
+                        continue;
+                    }
+
+                    // Check for protected resource overlap
+                    let has_resource = memory.resources_overlapping(&candidate).len() > 0;
+                    if has_resource && params.zone_type != "mining" {
+                        continue;
+                    }
+
+                    // Check for existing zone overlap
+                    let overlapping_zones = memory.zones_overlapping(&candidate);
+                    let has_incompatible_zone = overlapping_zones.iter().any(|z| {
+                        z.zone_type == ZoneType::Reserved
+                    });
+                    if has_incompatible_zone {
+                        continue;
+                    }
+
+                    // Found a suitable area!
+                    let result = serde_json::json!({
+                        "found": true,
+                        "area": {
+                            "x1": check_x,
+                            "y1": check_y,
+                            "x2": check_x + width,
+                            "y2": check_y + height
+                        },
+                        "center": {
+                            "x": check_x + width / 2,
+                            "y": check_y + height / 2
+                        }
+                    });
+                    return self.with_player_messages(
+                        serde_json::to_string_pretty(&result).unwrap_or_default()
+                    ).await;
+                }
+            }
+        }
+
+        let result = serde_json::json!({
+            "found": false,
+            "message": format!("No suitable {}x{} area found within radius {}", width, height, params.radius)
+        });
+        self.with_player_messages(serde_json::to_string_pretty(&result).unwrap_or_default()).await
+    }
+
+    /// Get a blank slate view of constraints only.
+    #[tool(description = "Get only the immovable constraints in an area (terrain, resources, zones) without showing existing buildings. \
+        Useful for thinking fresh about layout without being distracted by existing messy layouts.")]
+    async fn get_blank_slate(&self, Parameters(params): Parameters<GetBlankSlateParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let memory = AgentMemory::load();
+        let area = Area {
+            left_top: Position::new(params.x as f64 - params.radius as f64, params.y as f64 - params.radius as f64),
+            right_bottom: Position::new(params.x as f64 + params.radius as f64, params.y as f64 + params.radius as f64),
+        };
+
+        // Get resources in area
+        let resources = match client.find_resources(area, None).await {
+            Ok(r) => r,
+            Err(e) => return self.with_player_messages(format!("Error getting resources: {}", e)).await,
+        };
+
+        // Get zones overlapping this area
+        let zones: Vec<serde_json::Value> = memory
+            .zones_overlapping(&area)
+            .iter()
+            .map(|z| {
+                serde_json::json!({
+                    "id": z.id,
+                    "zone_type": z.zone_type.to_string(),
+                    "bounds": {
+                        "x1": z.bounds.left_top.x,
+                        "y1": z.bounds.left_top.y,
+                        "x2": z.bounds.right_bottom.x,
+                        "y2": z.bounds.right_bottom.y
+                    }
+                })
+            })
+            .collect();
+
+        // Format resources
+        let resource_info: Vec<serde_json::Value> = resources
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "name": r.name,
+                    "center": { "x": r.center.x, "y": r.center.y },
+                    "bounds": {
+                        "x1": r.bounding_box.left_top.x,
+                        "y1": r.bounding_box.left_top.y,
+                        "x2": r.bounding_box.right_bottom.x,
+                        "y2": r.bounding_box.right_bottom.y
+                    },
+                    "total_amount": r.total_amount
+                })
+            })
+            .collect();
+
+        let result = serde_json::json!({
+            "area": {
+                "x1": area.left_top.x,
+                "y1": area.left_top.y,
+                "x2": area.right_bottom.x,
+                "y2": area.right_bottom.y
+            },
+            "constraints": {
+                "resources": resource_info,
+                "zones": zones
+            },
+            "tip": "This shows only immovable constraints. Plan your layout around these, then create zones before building."
+        });
+
+        let result_str = serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e));
+        self.with_player_messages(result_str).await
+    }
+
+    /// Clear trees and rocks in an area.
+    #[tool(description = "Clear trees and rocks in a rectangular area to make space for building. \
+        Use dry_run=true to preview what will be cleared before actually clearing.")]
+    async fn clear_area(&self, Parameters(params): Parameters<ClearAreaParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let area = Area::new(params.x1, params.y1, params.x2, params.y2);
+        let lua = factorioctl::client::lua::LuaCommand::clear_area(
+            area,
+            params.clear_trees,
+            params.clear_rocks,
+            params.dry_run,
+        );
+
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+}
+
+/// Parse a zone type string into ZoneType enum
+fn parse_zone_type(s: &str) -> ZoneType {
+    match s.to_lowercase().as_str() {
+        "mining" => ZoneType::Mining,
+        "smelting" => ZoneType::Smelting,
+        "assembly" => ZoneType::Assembly,
+        "power" => ZoneType::Power,
+        "storage" => ZoneType::Storage,
+        "logistics" => ZoneType::Logistics,
+        "reserved" => ZoneType::Reserved,
+        other => {
+            if let Some(name) = other.strip_prefix("custom:") {
+                ZoneType::Custom(name.to_string())
+            } else {
+                ZoneType::Custom(other.to_string())
+            }
+        }
     }
 }
 

@@ -9,6 +9,7 @@
 pub mod analyze;
 pub mod client;
 pub mod config;
+pub mod memory;
 pub mod output;
 pub mod world;
 
