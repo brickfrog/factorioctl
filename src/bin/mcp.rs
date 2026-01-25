@@ -17,7 +17,7 @@ use factorioctl::analyze::{
     analyze_belt_reach, analyze_inserters, find_belt_gaps, find_belt_networks, BeltGraph,
 };
 use factorioctl::client::FactorioClient;
-use factorioctl::world::{Area, Direction, Position, TilePos};
+use factorioctl::world::{find_belt_route, Area, Direction, GridPos, Position, TilePos};
 
 /// Connection configuration loaded from environment or config
 #[derive(Clone)]
@@ -177,6 +177,31 @@ pub struct InsertItemsParams {
 }
 
 fn default_inventory_type() -> String { "chest".to_string() }
+
+/// Parameters for route_belt tool - routes belts from A to B using pathfinding
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct RouteBeltParams {
+    /// Starting X coordinate (integer tile)
+    pub from_x: i32,
+    /// Starting Y coordinate (integer tile)
+    pub from_y: i32,
+    /// Destination X coordinate (integer tile)
+    pub to_x: i32,
+    /// Destination Y coordinate (integer tile)
+    pub to_y: i32,
+    /// Belt type (e.g., 'transport-belt', 'fast-transport-belt')
+    #[serde(default = "default_belt_type")]
+    pub belt_type: String,
+    /// Search radius for obstacle detection
+    #[serde(default = "default_search_radius")]
+    pub search_radius: u32,
+    /// If true, only plan the route without placing belts
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+fn default_belt_type() -> String { "transport-belt".to_string() }
+fn default_search_radius() -> u32 { 10 }
 
 /// Parameters for remove_entity tool
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -519,6 +544,75 @@ impl FactorioMcp {
         match client.remove_entity(params.unit_number).await {
             Ok(()) => "Entity removed successfully".to_string(),
             Err(e) => format!("Error: {}", e),
+        }
+    }
+
+    /// Route belts from point A to point B using A* pathfinding.
+    #[tool(description = "Route belts from one position to another using A* pathfinding to avoid obstacles. \
+        This is the recommended way to create belt connections. Use dry_run=true to preview the path before placing.")]
+    async fn route_belt(&self, Parameters(params): Parameters<RouteBeltParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return format!("Error: {}", e),
+        };
+
+        // Calculate search area
+        let padding = params.search_radius as i32;
+        let area = Area {
+            left_top: Position::new(
+                (params.from_x.min(params.to_x) - padding) as f64,
+                (params.from_y.min(params.to_y) - padding) as f64,
+            ),
+            right_bottom: Position::new(
+                (params.from_x.max(params.to_x) + padding + 1) as f64,
+                (params.from_y.max(params.to_y) + padding + 1) as f64,
+            ),
+        };
+
+        // Build collision map
+        let collision_map = match client.build_collision_map(area).await {
+            Ok(cm) => cm,
+            Err(e) => return format!("Error building collision map: {}", e),
+        };
+
+        // Find path
+        let start = GridPos::new(params.from_x, params.from_y);
+        let goal = GridPos::new(params.to_x, params.to_y);
+        let result = find_belt_route(start, goal, &collision_map);
+
+        if !result.success {
+            return format!("Route failed: {}", result.error.unwrap_or_else(|| "unknown error".to_string()));
+        }
+
+        if params.dry_run {
+            return format!(
+                "Dry run - would place {} belts with {} turns:\n{}",
+                result.belt_count,
+                result.turn_count,
+                serde_json::to_string_pretty(&result.belts).unwrap_or_default()
+            );
+        }
+
+        // Place the belts
+        let mut placed = 0;
+        let mut errors = Vec::new();
+
+        for belt in &result.belts {
+            match client.place_entity(&params.belt_type, belt.position, belt.direction).await {
+                Ok(_) => placed += 1,
+                Err(e) => errors.push(format!("({}, {}): {}", belt.position.x, belt.position.y, e)),
+            }
+        }
+
+        if errors.is_empty() {
+            format!("Successfully placed {} belts with {} turns", placed, result.turn_count)
+        } else {
+            format!(
+                "Placed {}/{} belts. Errors:\n{}",
+                placed,
+                result.belt_count,
+                errors.join("\n")
+            )
         }
     }
 
