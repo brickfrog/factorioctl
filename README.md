@@ -114,6 +114,18 @@ FACTORIO_RCON_PASSWORD=yourpassword ./target/debug/mcp
 - `get_inventory` - Get character inventory
 - `get_tick` - Get current game tick
 
+**Research:**
+- `get_research_status` - Get current research progress, queue, and researched count
+- `get_available_research` - List technologies that can be researched now
+- `start_research` - Queue a technology for research
+
+**Power:**
+- `get_power_status` - Get power network status at a location
+- `get_power_networks` - Find all power networks in an area
+
+**Alerts:**
+- `get_alerts` - Check for urgent conditions (empty drills, no fuel, no power, enemies)
+
 **Analysis:**
 - `analyze_belt_reach` - Analyze belt connectivity from a position
 - `analyze_belt_networks` - Find separate belt networks in an area
@@ -124,6 +136,7 @@ FACTORIO_RCON_PASSWORD=yourpassword ./target/debug/mcp
 - `place_entity` - Place a single entity
 - `mine_at` - Mine at a position
 - `insert_items` - Insert items into an entity
+- `extract_items` - Extract items from an entity
 - `remove_entity` - Remove an entity
 - `execute_lua` - Execute raw Lua command
 

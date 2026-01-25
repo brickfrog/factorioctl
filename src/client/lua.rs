@@ -1694,6 +1694,394 @@ rcon.print(helpers.table_to_json(msgs))
         .to_string()
     }
 
+    // --- Research Commands ---
+
+    /// Get overall research status
+    pub fn get_research_status() -> String {
+        r#"
+local force = game.forces.player
+local result = {
+    researched_count = 0,
+    total_count = 0,
+    current_research = nil,
+    research_progress = 0,
+    research_queue = {}
+}
+
+-- Count technologies
+for name, tech in pairs(force.technologies) do
+    result.total_count = result.total_count + 1
+    if tech.researched then
+        result.researched_count = result.researched_count + 1
+    end
+end
+
+-- Current research
+if force.current_research then
+    local tech = force.current_research
+    result.current_research = {
+        name = tech.name,
+        level = tech.level,
+        research_unit_count = tech.research_unit_count
+    }
+    result.research_progress = force.research_progress
+end
+
+-- Research queue
+if force.research_queue then
+    for i, tech in pairs(force.research_queue) do
+        table.insert(result.research_queue, {
+            name = tech.name,
+            level = tech.level
+        })
+    end
+end
+
+rcon.print(helpers.table_to_json(result))
+"#
+        .trim()
+        .to_string()
+    }
+
+    /// Get available research (technologies that can be researched now)
+    pub fn get_available_research() -> String {
+        r#"
+local force = game.forces.player
+local result = {}
+
+for name, tech in pairs(force.technologies) do
+    if tech.enabled and not tech.researched then
+        -- Check if all prerequisites are researched
+        local can_research = true
+        for _, prereq in pairs(tech.prerequisites) do
+            if not prereq.researched then
+                can_research = false
+                break
+            end
+        end
+
+        if can_research then
+            local ingredients = {}
+            for _, ing in pairs(tech.research_unit_ingredients) do
+                table.insert(ingredients, {
+                    name = ing.name,
+                    amount = ing.amount
+                })
+            end
+
+            local effects = {}
+            for _, eff in pairs(tech.effects) do
+                if eff.type == "unlock-recipe" then
+                    table.insert(effects, {
+                        type = "unlock-recipe",
+                        recipe = eff.recipe
+                    })
+                elseif eff.type == "turret-attack" then
+                    table.insert(effects, {
+                        type = "turret-attack",
+                        turret_id = eff.turret_id,
+                        modifier = eff.modifier
+                    })
+                else
+                    table.insert(effects, {
+                        type = eff.type,
+                        modifier = eff.modifier
+                    })
+                end
+            end
+
+            table.insert(result, {
+                name = tech.name,
+                level = tech.level,
+                research_unit_count = tech.research_unit_count,
+                research_unit_energy = tech.research_unit_energy,
+                ingredients = ingredients,
+                effects = effects
+            })
+        end
+    end
+end
+
+rcon.print(helpers.table_to_json(result))
+"#
+        .trim()
+        .to_string()
+    }
+
+    /// Start researching a technology (queues it properly)
+    pub fn start_research(tech_name: &str) -> String {
+        format!(
+            r#"
+local force = game.forces.player
+local tech = force.technologies["{}"]
+
+if not tech then
+    rcon.print('{{"success": false, "error": "Technology not found"}}')
+    return
+end
+
+if tech.researched then
+    rcon.print('{{"success": false, "error": "Already researched"}}')
+    return
+end
+
+if not tech.enabled then
+    rcon.print('{{"success": false, "error": "Technology not enabled"}}')
+    return
+end
+
+-- Check prerequisites
+for _, prereq in pairs(tech.prerequisites) do
+    if not prereq.researched then
+        rcon.print('{{"success": false, "error": "Prerequisites not met: ' .. prereq.name .. '"}}')
+        return
+    end
+end
+
+-- Queue the research properly (not cheating)
+local added = force.add_research(tech)
+if added then
+    rcon.print(helpers.table_to_json({{
+        success = true,
+        name = tech.name,
+        research_unit_count = tech.research_unit_count
+    }}))
+else
+    rcon.print('{{"success": false, "error": "Failed to queue research"}}')
+end
+"#,
+            tech_name
+        )
+        .trim()
+        .to_string()
+    }
+
+    // --- Power Network Commands ---
+
+    /// Get power status at a location
+    pub fn get_power_status(x: i32, y: i32, radius: u32) -> String {
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local poles = surface.find_entities_filtered{{
+    type = "electric-pole",
+    position = {{ {}, {} }},
+    radius = {}
+}}
+
+if #poles == 0 then
+    rcon.print('{{"error": "No electric poles found nearby"}}')
+    return
+end
+
+local pole = poles[1]
+local network = pole.electric_network_id
+local stats = pole.electric_network_statistics
+
+local result = {{
+    network_id = network,
+    pole_position = {{ x = pole.position.x, y = pole.position.y }},
+    pole_name = pole.name
+}}
+
+if stats then
+    -- Get flow statistics (last 5 seconds = 300 ticks)
+    local input_flow = {{}}
+    local output_flow = {{}}
+
+    for name, count in pairs(stats.input_counts) do
+        local flow = stats.get_flow_count{{
+            name = name,
+            input = true,
+            precision_index = defines.flow_precision_index.five_seconds
+        }}
+        if flow > 0 then
+            table.insert(input_flow, {{ name = name, flow = flow }})
+        end
+    end
+
+    for name, count in pairs(stats.output_counts) do
+        local flow = stats.get_flow_count{{
+            name = name,
+            input = false,
+            precision_index = defines.flow_precision_index.five_seconds
+        }}
+        if flow > 0 then
+            table.insert(output_flow, {{ name = name, flow = flow }})
+        end
+    end
+
+    result.input_flow = input_flow
+    result.output_flow = output_flow
+end
+
+rcon.print(helpers.table_to_json(result))
+"#,
+            x, y, radius
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Get all power networks in an area
+    pub fn get_power_networks(x: i32, y: i32, radius: u32) -> String {
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local r = {}
+local area = {{ {{ {} - r, {} - r }}, {{ {} + r, {} + r }} }}
+local poles = surface.find_entities_filtered{{
+    type = "electric-pole",
+    area = area
+}}
+
+-- Group by network ID
+local networks = {{}}
+for _, pole in pairs(poles) do
+    local net_id = pole.electric_network_id
+    if net_id then
+        if not networks[net_id] then
+            networks[net_id] = {{
+                network_id = net_id,
+                pole_count = 0,
+                poles = {{}}
+            }}
+        end
+        networks[net_id].pole_count = networks[net_id].pole_count + 1
+        if #networks[net_id].poles < 3 then  -- Sample up to 3 poles
+            table.insert(networks[net_id].poles, {{
+                name = pole.name,
+                position = {{ x = pole.position.x, y = pole.position.y }}
+            }})
+        end
+    end
+end
+
+local result = {{}}
+for net_id, data in pairs(networks) do
+    table.insert(result, data)
+end
+
+rcon.print(helpers.table_to_json(result))
+"#,
+            radius, x, y, x, y
+        )
+        .trim()
+        .to_string()
+    }
+
+    // --- Alerts/Notifications Commands ---
+
+    /// Get alerts for urgent conditions in an area
+    pub fn get_alerts(x: i32, y: i32, radius: u32) -> String {
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local r = {}
+local area = {{ {{ {} - r, {} - r }}, {{ {} + r, {} + r }} }}
+local alerts = {{}}
+
+-- 1. Check for low power (poles with low satisfaction)
+local poles = surface.find_entities_filtered{{ type = "electric-pole", area = area }}
+local checked_networks = {{}}
+for _, pole in pairs(poles) do
+    local net_id = pole.electric_network_id
+    if net_id and not checked_networks[net_id] then
+        checked_networks[net_id] = true
+        -- Check if any connected entity has insufficient power
+        -- Note: Factorio 2.0 doesn't expose satisfaction directly,
+        -- so we check for entities with low_power status
+    end
+end
+
+-- 2. Empty drills (mining drills with no resources)
+local drills = surface.find_entities_filtered{{ type = "mining-drill", area = area }}
+for _, drill in pairs(drills) do
+    if drill.mining_target == nil and drill.status == defines.entity_status.no_minable_resources then
+        table.insert(alerts, {{
+            type = "empty_drill",
+            entity_name = drill.name,
+            position = {{ x = drill.position.x, y = drill.position.y }},
+            unit_number = drill.unit_number
+        }})
+    end
+end
+
+-- 3. Furnaces/boilers out of fuel
+local furnaces = surface.find_entities_filtered{{ type = "furnace", area = area }}
+for _, furnace in pairs(furnaces) do
+    if furnace.burner then
+        local fuel_inv = furnace.get_fuel_inventory()
+        if fuel_inv and fuel_inv.is_empty() then
+            table.insert(alerts, {{
+                type = "no_fuel",
+                entity_name = furnace.name,
+                position = {{ x = furnace.position.x, y = furnace.position.y }},
+                unit_number = furnace.unit_number
+            }})
+        end
+    end
+end
+
+local boilers = surface.find_entities_filtered{{ type = "boiler", area = area }}
+for _, boiler in pairs(boilers) do
+    if boiler.burner then
+        local fuel_inv = boiler.get_fuel_inventory()
+        if fuel_inv and fuel_inv.is_empty() then
+            table.insert(alerts, {{
+                type = "no_fuel",
+                entity_name = boiler.name,
+                position = {{ x = boiler.position.x, y = boiler.position.y }},
+                unit_number = boiler.unit_number
+            }})
+        end
+    end
+end
+
+-- 4. Assemblers without power or ingredients
+local assemblers = surface.find_entities_filtered{{ type = "assembling-machine", area = area }}
+for _, asm in pairs(assemblers) do
+    if asm.status == defines.entity_status.no_power then
+        table.insert(alerts, {{
+            type = "no_power",
+            entity_name = asm.name,
+            position = {{ x = asm.position.x, y = asm.position.y }},
+            unit_number = asm.unit_number
+        }})
+    elseif asm.status == defines.entity_status.no_ingredients then
+        table.insert(alerts, {{
+            type = "no_ingredients",
+            entity_name = asm.name,
+            position = {{ x = asm.position.x, y = asm.position.y }},
+            unit_number = asm.unit_number,
+            recipe = asm.get_recipe() and asm.get_recipe().name or nil
+        }})
+    end
+end
+
+-- 5. Nearby enemies
+local enemies = surface.find_entities_filtered{{
+    force = "enemy",
+    area = area,
+    limit = 10
+}}
+for _, enemy in pairs(enemies) do
+    table.insert(alerts, {{
+        type = "enemy_nearby",
+        entity_name = enemy.name,
+        position = {{ x = enemy.position.x, y = enemy.position.y }},
+        health = enemy.health
+    }})
+end
+
+rcon.print(helpers.table_to_json(alerts))
+"#,
+            radius, x, y, x, y
+        )
+        .trim()
+        .to_string()
+    }
+
     /// Get items on transport belts with lane separation
     pub fn get_belt_lane_contents(area: Area) -> String {
         format!(

@@ -277,6 +277,39 @@ pub struct BeltSourcesParams {
     pub radius: u32,
 }
 
+/// Parameters for start_research tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct StartResearchParams {
+    /// Technology name to research (e.g., 'automation', 'logistics')
+    pub technology: String,
+}
+
+/// Parameters for power status tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct PowerStatusParams {
+    /// X coordinate to search near
+    pub x: i32,
+    /// Y coordinate to search near
+    pub y: i32,
+    /// Radius to search for electric poles
+    #[serde(default = "default_power_radius")]
+    pub radius: u32,
+}
+
+fn default_power_radius() -> u32 { 50 }
+
+/// Parameters for alerts tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AlertsParams {
+    /// X coordinate of area center
+    pub x: i32,
+    /// Y coordinate of area center
+    pub y: i32,
+    /// Radius around center to check for alerts
+    #[serde(default = "default_radius")]
+    pub radius: u32,
+}
+
 // === The MCP Server ===
 
 /// The MCP server for Factorio control
@@ -830,6 +863,113 @@ impl FactorioMcp {
         let result = match trace_belt_sources(origin, &graph, &entities) {
             Some(r) => serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e)),
             None => format!("No belt found at position ({}, {})", params.x, params.y),
+        };
+        self.with_player_messages(result).await
+    }
+
+    // --- Research Tools ---
+
+    /// Get research status.
+    #[tool(description = "Get overall research status including current research progress, researched count, and research queue.")]
+    async fn get_research_status(&self) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = factorioctl::client::lua::LuaCommand::get_research_status();
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Get available research.
+    #[tool(description = "Get technologies that can be researched now (enabled, prerequisites met, not yet researched). \
+        Returns name, ingredients, effects, and research unit count.")]
+    async fn get_available_research(&self) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = factorioctl::client::lua::LuaCommand::get_available_research();
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Start researching a technology.
+    #[tool(description = "Queue a technology for research. Uses proper research queue (not cheating). \
+        Technology must be enabled and have all prerequisites researched.")]
+    async fn start_research(&self, Parameters(params): Parameters<StartResearchParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = factorioctl::client::lua::LuaCommand::start_research(&params.technology);
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    // --- Power Network Tools ---
+
+    /// Get power network status at a location.
+    #[tool(description = "Get power network status near a position. Returns network ID, connected pole info, \
+        and power flow statistics (production/consumption).")]
+    async fn get_power_status(&self, Parameters(params): Parameters<PowerStatusParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = factorioctl::client::lua::LuaCommand::get_power_status(params.x, params.y, params.radius);
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Get all power networks in an area.
+    #[tool(description = "Find all electric power networks in an area. Returns network IDs and pole counts. \
+        Useful for understanding power grid layout.")]
+    async fn get_power_networks(&self, Parameters(params): Parameters<AreaParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = factorioctl::client::lua::LuaCommand::get_power_networks(params.x, params.y, params.radius);
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    // --- Alert Tools ---
+
+    /// Get alerts for urgent conditions.
+    #[tool(description = "Check for urgent conditions in an area: empty drills, entities without fuel, \
+        machines without power/ingredients, nearby enemies. Useful for monitoring factory health.")]
+    async fn get_alerts(&self, Parameters(params): Parameters<AlertsParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = factorioctl::client::lua::LuaCommand::get_alerts(params.x, params.y, params.radius);
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
         };
         self.with_player_messages(result).await
     }
