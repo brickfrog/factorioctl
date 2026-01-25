@@ -38,6 +38,7 @@ pub struct MapCommand {
     pub detail: DetailLevel,
 }
 
+/// Detail level for map rendering
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum DetailLevel {
     /// Only show player-built entities
@@ -223,7 +224,7 @@ fn direction_arrow(direction: u8) -> char {
 }
 
 /// Render entities as ASCII map
-fn render_ascii_map(
+pub fn render_ascii_map(
     entities: &[Entity],
     center: &Position,
     radius: u32,

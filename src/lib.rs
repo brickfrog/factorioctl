@@ -7,6 +7,7 @@
 //! - Server process management
 
 pub mod analyze;
+pub mod cli;
 pub mod client;
 pub mod config;
 pub mod memory;

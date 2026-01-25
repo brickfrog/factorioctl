@@ -223,6 +223,11 @@ impl CollisionMap {
     pub fn blocked_count(&self) -> usize {
         self.blocked.len()
     }
+
+    /// Mark a position as not blocked (remove from blocked set)
+    pub fn unblock(&mut self, pos: GridPos) {
+        self.blocked.remove(&pos);
+    }
 }
 
 /// A single belt placement in the route

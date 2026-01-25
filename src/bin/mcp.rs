@@ -138,7 +138,7 @@ pub struct PlaceEntityParams {
     pub x: f64,
     /// Y coordinate to place at
     pub y: f64,
-    /// Direction: 0=North, 2=East, 4=South, 6=West
+    /// Direction: 0=North, 4=East, 8=South, 12=West
     #[serde(default)]
     pub direction: u8,
 }
@@ -236,6 +236,11 @@ pub struct RouteBeltParams {
     /// Requires the appropriate technology to be researched (logistics, logistics-2, or logistics-3).
     #[serde(default)]
     pub allow_underground: bool,
+    /// Allow routing to start/end on existing belts (default: false).
+    /// When true, existing belts at start/end positions are treated as valid connection points.
+    /// Useful for extending or branching off existing belt networks.
+    #[serde(default)]
+    pub extend_existing: bool,
 }
 
 fn default_belt_type() -> String { "transport-belt".to_string() }
@@ -444,6 +449,22 @@ pub struct FindBuildAreaParams {
     pub radius: u32,
 }
 
+/// Parameters for render_map tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct RenderMapParams {
+    /// X coordinate of area center (default: character position)
+    pub x: Option<i32>,
+    /// Y coordinate of area center (default: character position)
+    pub y: Option<i32>,
+    /// Map radius in tiles (default: 15)
+    #[serde(default = "default_map_radius")]
+    pub radius: u32,
+    /// Detail level: "minimal", "normal", or "detailed" (default: "normal")
+    pub detail: Option<String>,
+}
+
+fn default_map_radius() -> u32 { 15 }
+
 /// Parameters for get_blank_slate tool
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetBlankSlateParams {
@@ -586,6 +607,53 @@ impl FactorioMcp {
             Err(e) => format!("Error: {}", e),
         };
         self.with_player_messages(result).await
+    }
+
+    /// Render an ASCII map of an area.
+    #[tool(description = "Render an ASCII map showing entities in an area. Returns a visual representation \
+        useful for understanding layouts at a glance. Legend: @=you ^v<>=belt D=drill F=furnace A=assembler \
+        i=inserter I=iron C=copper c=coal S=stone B=chest P=pole")]
+    async fn render_map(&self, Parameters(params): Parameters<RenderMapParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        // Get center position - use provided or character position
+        let center = if let (Some(x), Some(y)) = (params.x, params.y) {
+            Position::new(x as f64 + 0.5, y as f64 + 0.5)
+        } else {
+            match client.get_character_position().await {
+                Ok(pos) => pos,
+                Err(e) => return self.with_player_messages(format!("Error getting position: {}", e)).await,
+            }
+        };
+
+        let r = params.radius as f64;
+        let area = Area {
+            left_top: Position::new(center.x - r, center.y - r),
+            right_bottom: Position::new(center.x + r, center.y + r),
+        };
+
+        // Query entities in the area
+        let entities = match client.find_entities(area, None, None).await {
+            Ok(e) => e,
+            Err(e) => return self.with_player_messages(format!("Error getting entities: {}", e)).await,
+        };
+
+        // Get character position for marking
+        let char_pos = client.get_character_position().await.ok();
+
+        // Parse detail level
+        let detail = match params.detail.as_deref() {
+            Some("minimal") => factorioctl::cli::DetailLevel::Minimal,
+            Some("detailed") => factorioctl::cli::DetailLevel::Detailed,
+            _ => factorioctl::cli::DetailLevel::Normal,
+        };
+
+        // Render the map
+        let map = factorioctl::cli::render_ascii_map(&entities, &center, params.radius, char_pos.as_ref(), detail);
+        self.with_player_messages(map).await
     }
 
     /// Get resource patches (ore, oil) in an area.
@@ -933,6 +1001,16 @@ impl FactorioMcp {
             Ok(cm) => cm,
             Err(e) => return self.with_player_messages(format!("Error building collision map: {}", e)).await,
         };
+
+        // If extend_existing is enabled, unblock start/end positions if they have existing belts
+        if params.extend_existing {
+            let start_grid = GridPos::new(params.from_x, params.from_y);
+            let goal_grid = GridPos::new(params.to_x, params.to_y);
+            // Check if positions are currently blocked (e.g., by existing belts)
+            // If so, unblock them to allow routing to connect to existing belts
+            collision_map.unblock(start_grid);
+            collision_map.unblock(goal_grid);
+        }
 
         // Apply zone constraints if respect_zones is enabled
         if params.respect_zones {

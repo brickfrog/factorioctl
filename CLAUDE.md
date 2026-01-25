@@ -51,6 +51,20 @@ Whenever there might be silence, fill it with:
 - Craft and mine items legitimately - no spawning
 - Check player chat periodically and respond
 
+## Handling Movement Blockages
+
+When `walk_to` fails with "Blocked or stuck":
+
+1. **Trees and rocks are common obstacles** - Use `mine_at` to clear them
+2. **Pattern:**
+   ```
+   walk_to x=50 y=30  -> "Blocked or stuck"
+   mine_at x=50 y=30 count=3  -> clears trees/rocks
+   walk_to x=50 y=30  -> succeeds
+   ```
+3. **For larger areas:** Use `clear_area` before building or pathing
+4. **If still blocked:** Water and cliffs cannot be cleared - find alternate route
+
 ## Factory Organization
 
 ### Before Building
@@ -153,3 +167,58 @@ route_belt from_x=0 from_y=0 to_x=10 to_y=0 allow_underground=true
 - If tech not researched, falls back to surface-only routing
 - Router automatically chooses optimal mix of surface/underground
 - Underground belts are placed as matching entry/exit pairs
+
+### Belt and Furnace Setup Patterns
+
+**IMPORTANT:** `route_belt` creates point-to-point belt connections. For furnace arrays,
+you need belts running PARALLEL to furnaces with inserters bridging the gap.
+
+#### Correct Layout:
+```
+Input Belt    Inserters    Furnaces    Inserters    Output Belt
+    v            ->            F            ->            v
+    v            ->            F            ->            v
+    v            ->            F            ->            v
+```
+
+#### Step-by-step:
+1. Place furnaces in a column (e.g., at x=10)
+2. Route INPUT belt NEXT TO furnaces (e.g., x=8), not through them
+3. Place inserters facing toward furnaces (direction=4 for East)
+4. Route OUTPUT belt on other side (e.g., x=12)
+5. Place output inserters facing away from furnaces (direction=4 for East)
+
+#### Direction Reference:
+| Direction | Value | Inserter Behavior |
+|-----------|-------|-------------------|
+| North | 0 | Picks from South, drops to North |
+| East | 4 | Picks from West, drops to East |
+| South | 8 | Picks from North, drops to South |
+| West | 12 | Picks from East, drops to West |
+
+#### WRONG - Don't route INTO furnaces:
+```
+route_belt from_x=0 from_y=0 to_x=10 to_y=0  # Ends AT furnace position!
+```
+
+Instead, route to a position BESIDE the furnace where inserters can reach.
+
+### Extending Existing Belt Networks
+
+Use `route_belt` with `extend_existing=true` to connect to existing belts:
+
+**Purpose:**
+- Branch off an existing belt line
+- Connect two existing belt networks
+- Extend a belt to reach a new destination
+
+**Example:**
+```
+# Existing belt at (10, 5), want to branch to new assembler at (20, 5)
+route_belt from_x=10 from_y=5 to_x=20 to_y=5 extend_existing=true
+```
+
+**Behavior:**
+- Without `extend_existing`: Fails if start/end positions have belts (blocked)
+- With `extend_existing`: Treats existing belts as valid connection points
+- Skips placing belts at positions that already have compatible belts
