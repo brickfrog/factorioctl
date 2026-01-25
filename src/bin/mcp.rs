@@ -946,7 +946,25 @@ impl FactorioMcp {
 }
 
 #[tool_handler]
-impl ServerHandler for FactorioMcp {}
+impl ServerHandler for FactorioMcp {
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::model::ServerInfo {
+            protocol_version: rmcp::model::ProtocolVersion::LATEST,
+            capabilities: rmcp::model::ServerCapabilities {
+                tools: Some(rmcp::model::ToolsCapability::default()),
+                ..Default::default()
+            },
+            server_info: rmcp::model::Implementation {
+                name: "factorio-mcp".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                title: None,
+                icons: None,
+                website_url: None,
+            },
+            instructions: Some("Factorio game control server. Use these tools to interact with a running Factorio game.".to_string()),
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
