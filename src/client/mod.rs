@@ -193,19 +193,161 @@ impl FactorioClient {
     // --- Mining ---
 
     /// Mine entity at position
+    /// Walks to the entity if needed, then mines with mine_entity
     pub async fn mine_at(&mut self, position: Position, count: u32) -> Result<MineResult> {
-        let lua = LuaCommand::mine_at(position, count);
-        let response = self.execute_lua(&lua).await?;
-        let result: MineResult = serde_json::from_str(&response)?;
-        Ok(result)
+        // Get initial inventory count
+        let inv_before = self.character_inventory().await?;
+        let count_before: u32 = inv_before.items.iter().map(|i| i.count).sum();
+
+        // Walk to the target first
+        let char_pos = self.get_character_position().await?;
+        let dist = ((position.x - char_pos.x).powi(2) + (position.y - char_pos.y).powi(2)).sqrt();
+        if dist > 2.5 {
+            let _ = self.walk_to(position, false).await?;
+        }
+
+        // Mine using mine_entity (instant but reliable)
+        let mine_lua = format!(
+            r#"
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {{}} end c = global.factorioctl_character end
+if not (c and c.valid) then
+    rcon.print('{{"success": false, "error": "No character"}}')
+    return
+end
+
+local mined = 0
+for i = 1, {} do
+    local resources = game.surfaces[1].find_entities_filtered{{
+        position = {{ {}, {} }},
+        radius = 3,
+        type = "resource"
+    }}
+
+    local target = nil
+    if #resources > 0 then
+        target = resources[1]
+    else
+        local entities = game.surfaces[1].find_entities_filtered{{
+            position = {{ {}, {} }},
+            radius = 3
+        }}
+        for _, e in pairs(entities) do
+            if e.minable and e ~= c then
+                target = e
+                break
+            end
+        end
+    end
+
+    if target then
+        c.mine_entity(target, true)
+        mined = mined + 1
+    else
+        break
+    end
+end
+
+rcon.print('{{"success": true, "mined": ' .. mined .. '}}')
+"#,
+            count, position.x, position.y, position.x, position.y
+        );
+
+        let _ = self.execute_lua_silent(&mine_lua).await?;
+
+        // Get final inventory
+        let inv_after = self.character_inventory().await?;
+        let count_after: u32 = inv_after.items.iter().map(|i| i.count).sum();
+        let items_gained = count_after.saturating_sub(count_before);
+
+        Ok(MineResult {
+            success: items_gained > 0,
+            mined_count: items_gained,
+            error: None,
+            inventory: inv_after.items,
+        })
     }
 
-    /// Mine nearest entity of type
+    /// Mine nearest entity of a type
+    /// Walks to nearest entity and mines it
     pub async fn mine_nearest(&mut self, entity_type: &str, count: u32) -> Result<MineResult> {
-        let lua = LuaCommand::mine_nearest(entity_type, count);
-        let response = self.execute_lua(&lua).await?;
-        let result: MineResult = serde_json::from_str(&response)?;
-        Ok(result)
+        // Get initial inventory
+        let inv_before = self.character_inventory().await?;
+        let count_before: u32 = inv_before.items.iter().map(|i| i.count).sum();
+
+        for _ in 0..count {
+            // Find nearest entity of type
+            let find_lua = format!(
+                r#"
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {{}} end c = global.factorioctl_character end
+if not (c and c.valid) then rcon.print("error") return end
+
+local entities = game.surfaces[1].find_entities_filtered{{
+    name = "{}",
+    position = c.position,
+    radius = 100
+}}
+
+local nearest = nil
+local nearest_dist = math.huge
+for _, e in pairs(entities) do
+    if e.minable then
+        local dx = e.position.x - c.position.x
+        local dy = e.position.y - c.position.y
+        local dist = dx*dx + dy*dy
+        if dist < nearest_dist then
+            nearest = e
+            nearest_dist = dist
+        end
+    end
+end
+
+if nearest then
+    rcon.print(nearest.position.x .. "," .. nearest.position.y)
+else
+    rcon.print("none")
+end
+"#,
+                entity_type
+            );
+
+            let response = self.execute_lua_silent(&find_lua).await?;
+            if response.trim() == "none" || response.trim() == "error" {
+                break;
+            }
+
+            // Parse position
+            let parts: Vec<&str> = response.trim().split(',').collect();
+            if parts.len() != 2 {
+                break;
+            }
+            let target_pos = Position {
+                x: parts[0].parse().unwrap_or(0.0),
+                y: parts[1].parse().unwrap_or(0.0),
+            };
+
+            // Walk to and mine
+            let _ = self.mine_at(target_pos, 1).await?;
+        }
+
+        // Get final inventory
+        let inv_after = self.character_inventory().await?;
+        let count_after: u32 = inv_after.items.iter().map(|i| i.count).sum();
+        let items_gained = count_after.saturating_sub(count_before);
+
+        Ok(MineResult {
+            success: items_gained > 0,
+            mined_count: items_gained,
+            error: None,
+            inventory: inv_after.items,
+        })
     }
 
     // --- Crafting ---

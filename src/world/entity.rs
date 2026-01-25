@@ -66,6 +66,10 @@ pub struct CharacterStatus {
     /// Whether the character is currently walking
     #[serde(default)]
     pub walking: Option<bool>,
+
+    /// Whether the character is currently mining
+    #[serde(default)]
+    pub mining: Option<bool>,
 }
 
 /// Result of a mining operation

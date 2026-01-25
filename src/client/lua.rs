@@ -415,7 +415,11 @@ end
     /// Get character status
     pub fn character_status() -> String {
         r#"
-if not global then global = {} end local c = global.factorioctl_character
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {} end c = global.factorioctl_character end
 if c and c.valid then
     rcon.print(helpers.table_to_json({
         valid = true,
@@ -423,7 +427,8 @@ if c and c.valid then
         position = { x = c.position.x, y = c.position.y },
         health = c.health,
         crafting_queue_size = c.crafting_queue_size,
-        walking = c.walking_state.walking
+        walking = c.walking_state.walking,
+        mining = c.mining_state.mining
     }))
 else
     rcon.print('{"valid": false}')
@@ -436,7 +441,11 @@ end
     /// Get character inventory
     pub fn character_inventory() -> String {
         r#"
-if not global then global = {} end local c = global.factorioctl_character
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {} end c = global.factorioctl_character end
 if c and c.valid then
     local inv = c.get_main_inventory()
     local items = {}
@@ -460,7 +469,107 @@ end
         .to_string()
     }
 
-    /// Mine entity at position
+    /// Start mining at a position (uses mining_state for animations)
+    pub fn start_mining(position: Position) -> String {
+        format!(
+            r#"
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {{}} end c = global.factorioctl_character end
+if not (c and c.valid) then
+    rcon.print('{{"success": false, "error": "No character"}}')
+    return
+end
+
+-- Find a minable entity at the position
+local target = nil
+local resources = game.surfaces[1].find_entities_filtered{{
+    position = {{ {}, {} }},
+    radius = 1,
+    type = "resource"
+}}
+if #resources > 0 then
+    target = resources[1]
+else
+    local entities = game.surfaces[1].find_entities_filtered{{
+        position = {{ {}, {} }},
+        radius = 1
+    }}
+    for _, e in pairs(entities) do
+        if e.minable and e ~= c then
+            target = e
+            break
+        end
+    end
+end
+
+if not target then
+    rcon.print('{{"success": false, "error": "No minable entity at position"}}')
+    return
+end
+
+-- Check if in range
+local dx = target.position.x - c.position.x
+local dy = target.position.y - c.position.y
+local dist = math.sqrt(dx*dx + dy*dy)
+if dist > c.resource_reach_distance + 0.5 then
+    rcon.print('{{"success": false, "error": "Too far", "distance": ' .. dist .. ', "reach": ' .. c.resource_reach_distance .. '}}')
+    return
+end
+
+-- Start mining
+c.mining_state = {{ mining = true, position = target.position }}
+rcon.print('{{"success": true, "target": "' .. target.name .. '", "position": {{\"x\": ' .. target.position.x .. ', \"y\": ' .. target.position.y .. '}}}}')
+"#,
+            position.x, position.y, position.x, position.y
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Stop mining
+    pub fn stop_mining() -> String {
+        r#"
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {} end c = global.factorioctl_character end
+if c and c.valid then
+    c.mining_state = { mining = false }
+    rcon.print("ok")
+else
+    rcon.print("error")
+end
+"#
+        .trim()
+        .to_string()
+    }
+
+    /// Get mining status
+    pub fn get_mining_status() -> String {
+        r#"
+local c = nil
+for _, p in pairs(game.connected_players) do
+    if p.character and p.character.valid then c = p.character break end
+end
+if not c then if not global then global = {} end c = global.factorioctl_character end
+if c and c.valid then
+    rcon.print(helpers.table_to_json({
+        mining = c.mining_state.mining,
+        position = { x = c.position.x, y = c.position.y }
+    }))
+else
+    rcon.print('{"mining": false}')
+end
+"#
+        .trim()
+        .to_string()
+    }
+
+    /// Mine entity at position (instant - for compatibility)
     pub fn mine_at(position: Position, count: u32) -> String {
         format!(
             r#"
