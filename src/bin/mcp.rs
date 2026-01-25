@@ -19,7 +19,10 @@ use factorioctl::analyze::{
 };
 use factorioctl::client::FactorioClient;
 use factorioctl::memory::{AgentMemory, BeltRouting, ProtectedResource, Zone, ZoneType};
-use factorioctl::world::{find_belt_route, Area, Direction, GridPos, Position, TilePos};
+use factorioctl::world::{
+    find_belt_route_with_options, Area, BeltKind, Direction, GridPos, Position, RoutingOptions,
+    TilePos, UndergroundConfig,
+};
 
 /// Connection configuration loaded from environment or config
 #[derive(Clone)]
@@ -228,6 +231,11 @@ pub struct RouteBeltParams {
     /// and prefers Logistics zones for belt highways.
     #[serde(default)]
     pub respect_zones: bool,
+    /// Allow underground belts in routing (default: false).
+    /// When true, the router may use underground belts to skip obstacles.
+    /// Requires the appropriate technology to be researched (logistics, logistics-2, or logistics-3).
+    #[serde(default)]
+    pub allow_underground: bool,
 }
 
 fn default_belt_type() -> String { "transport-belt".to_string() }
@@ -938,36 +946,91 @@ impl FactorioMcp {
             }
         }
 
+        // Determine underground config (only if requested AND tech is researched)
+        let underground_config = if params.allow_underground {
+            if let Some(config) = UndergroundConfig::from_belt_type(&params.belt_type) {
+                // Check if required technology is researched
+                match client.is_tech_researched(&config.required_tech).await {
+                    Ok(true) => Some(config),
+                    Ok(false) => None, // Tech not researched, fall back to surface only
+                    Err(_) => None,    // Error checking tech, fall back to surface only
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Build routing options
+        let routing_options = RoutingOptions {
+            allow_underground: underground_config.is_some(),
+            underground_config: underground_config.clone(),
+            underground_penalty: 0.5,
+            underground_skip_cost: 0.05,
+        };
+
         // Find path
         let start = GridPos::new(params.from_x, params.from_y);
         let goal = GridPos::new(params.to_x, params.to_y);
-        let result = find_belt_route(start, goal, &collision_map);
+        let result = find_belt_route_with_options(start, goal, &collision_map, &routing_options);
 
         if !result.success {
             return self.with_player_messages(format!("Route failed: {}", result.error.unwrap_or_else(|| "unknown error".to_string()))).await;
         }
 
         if params.dry_run {
-            return self.with_player_messages(format!(
-                "Dry run - would place {} belts with {} turns:\n{}",
+            let mut msg = format!(
+                "Dry run - would place {} belts with {} turns",
                 result.belt_count,
-                result.turn_count,
-                serde_json::to_string_pretty(&result.belts).unwrap_or_default()
-            )).await;
+                result.turn_count
+            );
+            if result.underground_count > 0 {
+                msg.push_str(&format!(", {} underground pairs", result.underground_count));
+            }
+            msg.push_str(&format!(":\n{}", serde_json::to_string_pretty(&result.belts).unwrap_or_default()));
+            return self.with_player_messages(msg).await;
         }
 
         // Place the belts
         let mut placed = 0;
         let mut errors = Vec::new();
 
+        // Get underground entity name if available
+        let underground_entity = underground_config.as_ref().map(|c| c.entity_name.as_str());
+
         for belt in &result.belts {
-            match client.place_entity(&params.belt_type, belt.position, belt.direction).await {
+            // Determine which entity to place based on belt kind
+            let entity_name = match belt.kind {
+                BeltKind::Surface => &params.belt_type,
+                BeltKind::UndergroundEntry | BeltKind::UndergroundExit => {
+                    underground_entity.unwrap_or(&params.belt_type)
+                }
+            };
+
+            // For underground belts, we need to set the type (input vs output)
+            // Factorio uses direction + type to distinguish entry/exit
+            // Entry: direction points in flow direction, type = "input"
+            // Exit: direction points in flow direction, type = "output"
+            let place_result = if belt.kind == BeltKind::UndergroundEntry || belt.kind == BeltKind::UndergroundExit {
+                let ug_type = match belt.kind {
+                    BeltKind::UndergroundEntry => "input",
+                    BeltKind::UndergroundExit => "output",
+                    _ => "input",
+                };
+                // Place underground belt with type
+                client.place_underground_belt(entity_name, belt.position, belt.direction, ug_type).await
+            } else {
+                client.place_entity(entity_name, belt.position, belt.direction).await
+            };
+
+            match place_result {
                 Ok(_) => placed += 1,
                 Err(e) => errors.push(format!("({}, {}): {}", belt.position.x, belt.position.y, e)),
             }
         }
 
-        let result_msg = if errors.is_empty() {
+        let mut result_msg = if errors.is_empty() {
             format!("Successfully placed {} belts with {} turns", placed, result.turn_count)
         } else {
             format!(
@@ -977,6 +1040,9 @@ impl FactorioMcp {
                 errors.join("\n")
             )
         };
+        if result.underground_count > 0 {
+            result_msg.push_str(&format!(" ({} underground pairs)", result.underground_count));
+        }
         self.with_player_messages(result_msg).await
     }
 

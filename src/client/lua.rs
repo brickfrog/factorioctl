@@ -919,6 +919,83 @@ end
         .to_string()
     }
 
+    /// Place an underground belt with specified type (input or output)
+    pub fn place_underground_belt(
+        entity_name: &str,
+        position: Position,
+        direction: Direction,
+        belt_type: &str, // "input" for entry, "output" for exit
+    ) -> String {
+        format!(
+            r#"
+local c = nil
+for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end
+if not c then if not global then global = {{}} end c = global.factorioctl_character end
+if not (c and c.valid) then
+    rcon.print('{{"error": "No character"}}')
+    return
+end
+
+local inv = c.get_main_inventory()
+if not inv or inv.get_item_count("{}") < 1 then
+    rcon.print('{{"error": "Item not in inventory"}}')
+    return
+end
+
+-- Check if can place
+local can_place = game.surfaces[1].can_place_entity{{
+    name = "{}",
+    position = {{ {}, {} }},
+    direction = {},
+    force = c.force,
+    build_check_type = defines.build_check_type.manual
+}}
+
+if not can_place then
+    rcon.print('{{"error": "Cannot place underground belt here"}}')
+    return
+end
+
+-- Create the underground belt with type (input = entry, output = exit)
+local e = game.surfaces[1].create_entity{{
+    name = "{}",
+    position = {{ {}, {} }},
+    direction = {},
+    type = "{}",
+    force = c.force
+}}
+
+if e then
+    inv.remove{{ name = "{}", count = 1 }}
+    rcon.print(helpers.table_to_json({{
+        unit_number = e.unit_number,
+        name = e.name,
+        entity_type = e.type,
+        position = {{ x = e.position.x, y = e.position.y }},
+        direction = e.direction,
+        belt_to_ground_type = e.belt_to_ground_type,
+        force = e.force.name
+    }}))
+else
+    rcon.print('{{"error": "Failed to create underground belt"}}')
+end
+"#,
+            entity_name,               // inventory check
+            entity_name,               // can_place_entity name
+            position.x,                // can_place_entity position x
+            position.y,                // can_place_entity position y
+            direction.to_factorio(),   // can_place_entity direction
+            entity_name,               // create_entity name
+            position.x,                // create_entity position x
+            position.y,                // create_entity position y
+            direction.to_factorio(),   // create_entity direction
+            belt_type,                 // create_entity type (input/output)
+            entity_name                // inv.remove
+        )
+        .trim()
+        .to_string()
+    }
+
     /// Place a ghost entity (for planning)
     pub fn place_ghost(entity_name: &str, position: Position, direction: Direction) -> String {
         format!(

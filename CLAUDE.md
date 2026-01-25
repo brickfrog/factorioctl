@@ -122,3 +122,34 @@ Use `route_belt` with `respect_zones=true` to route belts around factory areas:
 3. route_belt from_x=0 from_y=15 to_x=50 to_y=15 respect_zones=true
    -> Routes through main-bus corridor, avoids smelting area
 ```
+
+### Underground Belt Routing
+
+Use `route_belt` with `allow_underground=true` to enable underground belts:
+
+| Belt Type | Underground Type | Max Distance | Required Tech |
+|-----------|-----------------|--------------|---------------|
+| transport-belt | underground-belt | 4 tiles | `logistics` |
+| fast-transport-belt | fast-underground-belt | 6 tiles | `logistics-2` |
+| express-transport-belt | express-underground-belt | 8 tiles | `logistics-3` |
+
+**Benefits:**
+- Skip over obstacles (buildings, water, cliffs)
+- Cleaner factory layouts
+- Slightly cheaper than long surface routes
+
+**Cost Model:**
+- Surface belt: 1.0 per tile
+- Underground: 0.5 (entry) + 0.05 per skipped tile + 0.5 (exit)
+- Example: 5-tile underground = 1.15 vs 5.0 for surface
+
+**Usage:**
+```
+route_belt from_x=0 from_y=0 to_x=10 to_y=0 allow_underground=true
+```
+
+**Notes:**
+- Requires the appropriate technology to be researched
+- If tech not researched, falls back to surface-only routing
+- Router automatically chooses optimal mix of surface/underground
+- Underground belts are placed as matching entry/exit pairs

@@ -680,6 +680,40 @@ end
         Ok(())
     }
 
+    /// Check if a technology has been researched
+    pub async fn is_tech_researched(&mut self, tech_name: &str) -> Result<bool> {
+        let lua = format!(
+            r#"local tech = game.forces.player.technologies["{}"]
+               rcon.print(tech and tech.researched and "true" or "false")"#,
+            tech_name
+        );
+        let result = self.execute_lua(&lua).await?;
+        Ok(result.trim() == "true")
+    }
+
+    /// Place an underground belt with specified type (input or output)
+    pub async fn place_underground_belt(
+        &mut self,
+        entity_name: &str,
+        position: Position,
+        direction: Direction,
+        belt_type: &str, // "input" for entry, "output" for exit
+    ) -> Result<Entity> {
+        let lua = LuaCommand::place_underground_belt(entity_name, position, direction, belt_type);
+        let response = self.execute_lua(&lua).await?;
+        // Check for error response
+        if response.contains("\"error\"") {
+            #[derive(serde::Deserialize)]
+            struct ErrorResponse {
+                error: String,
+            }
+            let err: ErrorResponse = serde_json::from_str(&response)?;
+            anyhow::bail!("{}", err.error);
+        }
+        let entity: Entity = serde_json::from_str(&response)?;
+        Ok(entity)
+    }
+
     // --- Tick Control ---
 
     /// Pause the game

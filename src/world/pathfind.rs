@@ -7,6 +7,94 @@ use serde::{Deserialize, Serialize};
 
 use super::{Area, Direction, Position};
 
+/// Underground belt configuration
+#[derive(Debug, Clone)]
+pub struct UndergroundConfig {
+    /// Maximum distance between entry and exit
+    pub max_distance: u32,
+    /// Entity name for the underground belt
+    pub entity_name: String,
+    /// Technology name required to use this underground belt
+    pub required_tech: String,
+}
+
+impl UndergroundConfig {
+    /// Create underground config from belt type name
+    pub fn from_belt_type(belt_type: &str) -> Option<Self> {
+        match belt_type {
+            "transport-belt" => Some(Self {
+                max_distance: 4,
+                entity_name: "underground-belt".into(),
+                required_tech: "logistics".into(),
+            }),
+            "fast-transport-belt" => Some(Self {
+                max_distance: 6,
+                entity_name: "fast-underground-belt".into(),
+                required_tech: "logistics-2".into(),
+            }),
+            "express-transport-belt" => Some(Self {
+                max_distance: 8,
+                entity_name: "express-underground-belt".into(),
+                required_tech: "logistics-3".into(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Type of belt placement
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BeltKind {
+    /// Normal surface belt
+    Surface,
+    /// Underground belt entry (goes underground)
+    UndergroundEntry,
+    /// Underground belt exit (comes up from underground)
+    UndergroundExit,
+}
+
+impl Default for BeltKind {
+    fn default() -> Self {
+        Self::Surface
+    }
+}
+
+/// Options for belt routing
+#[derive(Debug, Clone)]
+pub struct RoutingOptions {
+    /// Allow using underground belts
+    pub allow_underground: bool,
+    /// Underground belt configuration (derived from belt_type)
+    pub underground_config: Option<UndergroundConfig>,
+    /// Cost for underground entry/exit (default: 0.5)
+    pub underground_penalty: f64,
+    /// Cost per tile when underground (default: 0.05)
+    pub underground_skip_cost: f64,
+}
+
+impl Default for RoutingOptions {
+    fn default() -> Self {
+        Self {
+            allow_underground: false,
+            underground_config: None,
+            underground_penalty: 0.5,
+            underground_skip_cost: 0.05,
+        }
+    }
+}
+
+/// How we arrived at a position during pathfinding
+#[derive(Debug, Clone, Copy)]
+enum MoveType {
+    /// Moved one tile in a direction (surface belt)
+    Surface(Direction),
+    /// Jumped underground from entry to exit
+    Underground {
+        direction: Direction,
+        distance: u32,
+    },
+}
+
 /// Grid position for pathfinding (integer coordinates)
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GridPos {
@@ -19,19 +107,20 @@ impl GridPos {
         Self { x, y }
     }
 
-    /// Convert from world Position (rounds to nearest tile)
+    /// Convert from world Position (floors to tile containing the position)
+    /// In Factorio, entities at (x.5, y.5) occupy tile (x, y)
     pub fn from_position(pos: &Position) -> Self {
         Self {
-            x: pos.x.round() as i32,
-            y: pos.y.round() as i32,
+            x: pos.x.floor() as i32,
+            y: pos.y.floor() as i32,
         }
     }
 
-    /// Convert to world Position (tile center)
+    /// Convert to world Position (tile center at x.5, y.5)
     pub fn to_position(&self) -> Position {
         Position {
-            x: self.x as f64,
-            y: self.y as f64,
+            x: self.x as f64 + 0.5,
+            y: self.y as f64 + 0.5,
         }
     }
 
@@ -48,6 +137,18 @@ impl GridPos {
             (GridPos::new(self.x, self.y + 1), Direction::South),
             (GridPos::new(self.x - 1, self.y), Direction::West),
         ]
+    }
+
+    /// Offset position by direction and distance (cardinal directions only)
+    pub fn offset(&self, direction: Direction, distance: i32) -> GridPos {
+        match direction {
+            Direction::North => GridPos::new(self.x, self.y - distance),
+            Direction::East => GridPos::new(self.x + distance, self.y),
+            Direction::South => GridPos::new(self.x, self.y + distance),
+            Direction::West => GridPos::new(self.x - distance, self.y),
+            // Diagonal directions - underground belts only support cardinal
+            _ => *self,
+        }
     }
 }
 
@@ -101,7 +202,12 @@ impl CollisionMap {
 
     /// Check if a position is walkable (not blocked and within bounds)
     pub fn is_walkable(&self, pos: &GridPos) -> bool {
-        !self.blocked.contains(pos) && self.bounds.contains(&pos.to_position())
+        // Check tile coordinates against bounds (inclusive, matching Area::contains behavior)
+        let in_bounds = pos.x >= self.bounds.left_top.x.floor() as i32
+            && pos.x <= self.bounds.right_bottom.x.floor() as i32
+            && pos.y >= self.bounds.left_top.y.floor() as i32
+            && pos.y <= self.bounds.right_bottom.y.floor() as i32;
+        !self.blocked.contains(pos) && in_bounds
     }
 
     /// Get movement cost for a tile (0.5 for preferred, 1.0 for normal)
@@ -124,6 +230,9 @@ impl CollisionMap {
 pub struct BeltPlacement {
     pub position: Position,
     pub direction: Direction,
+    /// Type of belt (surface, underground entry, or underground exit)
+    #[serde(default)]
+    pub kind: BeltKind,
 }
 
 /// Result of belt routing
@@ -137,6 +246,9 @@ pub struct RouteResult {
     pub belt_count: u32,
     /// Number of turns in the path
     pub turn_count: u32,
+    /// Number of underground belt pairs used
+    #[serde(default)]
+    pub underground_count: u32,
     /// Error message if routing failed
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -189,8 +301,18 @@ impl PartialOrd for PathNode {
     }
 }
 
-/// A* pathfinding for belt routing
+/// A* pathfinding for belt routing (without underground support)
 pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionMap) -> RouteResult {
+    find_belt_route_with_options(start, goal, collision_map, &RoutingOptions::default())
+}
+
+/// A* pathfinding for belt routing with configurable options including underground belts
+pub fn find_belt_route_with_options(
+    start: GridPos,
+    goal: GridPos,
+    collision_map: &CollisionMap,
+    options: &RoutingOptions,
+) -> RouteResult {
     // Check start and goal are valid
     if !collision_map.is_walkable(&start) {
         return RouteResult {
@@ -198,6 +320,7 @@ pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionM
             belts: vec![],
             belt_count: 0,
             turn_count: 0,
+            underground_count: 0,
             error: Some("Start position is blocked".to_string()),
         };
     }
@@ -207,13 +330,14 @@ pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionM
             belts: vec![],
             belt_count: 0,
             turn_count: 0,
+            underground_count: 0,
             error: Some("Goal position is blocked".to_string()),
         };
     }
 
     // A* data structures
     let mut open_set = BinaryHeap::new();
-    let mut came_from: HashMap<GridPos, (GridPos, Direction)> = HashMap::new();
+    let mut came_from: HashMap<GridPos, (GridPos, MoveType)> = HashMap::new();
     let mut g_score: HashMap<GridPos, f64> = HashMap::new();
     let mut closed_set: HashSet<GridPos> = HashSet::new();
 
@@ -228,16 +352,21 @@ pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionM
 
     while let Some(current) = open_set.pop() {
         if current.pos == goal {
-            // Reconstruct path
-            let path = reconstruct_path(&came_from, goal, start);
-            let belts = path_to_belt_placements(&path);
+            // Reconstruct path with move types
+            let path_with_moves = reconstruct_path_with_moves(&came_from, goal, start);
+            let belts = path_to_belt_placements_with_moves(&path_with_moves);
             let turn_count = count_turns(&belts);
+            let underground_count = belts
+                .iter()
+                .filter(|b| b.kind == BeltKind::UndergroundEntry)
+                .count() as u32;
 
             return RouteResult {
                 success: true,
                 belt_count: belts.len() as u32,
                 belts,
                 turn_count,
+                underground_count,
                 error: None,
             };
         }
@@ -251,10 +380,13 @@ pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionM
         // Get the direction we arrived from (for turn cost calculation)
         let arrival_direction = came_from
             .get(&current.pos)
-            .map(|(_, d)| *d)
+            .map(|(_, mt)| match mt {
+                MoveType::Surface(d) => *d,
+                MoveType::Underground { direction, .. } => *direction,
+            })
             .unwrap_or(Direction::North);
 
-        // Explore neighbors
+        // Explore surface neighbors
         for (neighbor, move_direction) in current.pos.cardinal_neighbors() {
             if !collision_map.is_walkable(&neighbor) || closed_set.contains(&neighbor) {
                 continue;
@@ -269,7 +401,7 @@ pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionM
             let current_g = g_score.get(&neighbor).copied().unwrap_or(f64::INFINITY);
             if tentative_g < current_g {
                 // This path is better
-                came_from.insert(neighbor, (current.pos, move_direction));
+                came_from.insert(neighbor, (current.pos, MoveType::Surface(move_direction)));
                 g_score.insert(neighbor, tentative_g);
 
                 let h = neighbor.manhattan_distance(&goal) as f64;
@@ -281,6 +413,57 @@ pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionM
                 });
             }
         }
+
+        // Explore underground jumps if enabled
+        if let Some(ref ug_config) = options.underground_config {
+            if options.allow_underground {
+                for direction in [Direction::North, Direction::East, Direction::South, Direction::West] {
+                    // Try underground jumps of length 2 to max_distance
+                    for distance in 2..=ug_config.max_distance {
+                        let exit_pos = current.pos.offset(direction, distance as i32);
+
+                        // Check exit is walkable (entry is current pos, already validated)
+                        if !collision_map.is_walkable(&exit_pos) {
+                            continue;
+                        }
+
+                        // Skip if already in closed set
+                        if closed_set.contains(&exit_pos) {
+                            continue;
+                        }
+
+                        // Calculate underground cost
+                        // entry + exit penalty + cost per skipped tile
+                        let skipped = distance.saturating_sub(2); // entry and exit don't count as skipped
+                        let ug_cost = options.underground_penalty * 2.0
+                            + (skipped as f64 * options.underground_skip_cost);
+
+                        // Add turn cost if changing direction
+                        let is_turn = current.pos != start && arrival_direction != direction;
+                        let turn_cost = if is_turn { 0.1 } else { 0.0 };
+                        let tentative_g = current.g_cost + ug_cost + turn_cost;
+
+                        let current_g = g_score.get(&exit_pos).copied().unwrap_or(f64::INFINITY);
+                        if tentative_g < current_g {
+                            // This underground path is better
+                            came_from.insert(
+                                exit_pos,
+                                (current.pos, MoveType::Underground { direction, distance }),
+                            );
+                            g_score.insert(exit_pos, tentative_g);
+
+                            let h = exit_pos.manhattan_distance(&goal) as f64;
+                            open_set.push(PathNode {
+                                pos: exit_pos,
+                                direction,
+                                g_cost: tentative_g,
+                                f_cost: tentative_g + h,
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // No path found
@@ -289,11 +472,12 @@ pub fn find_belt_route(start: GridPos, goal: GridPos, collision_map: &CollisionM
         belts: vec![],
         belt_count: 0,
         turn_count: 0,
+        underground_count: 0,
         error: Some("No path found - obstacles may be blocking the route".to_string()),
     }
 }
 
-/// Reconstruct path from came_from map
+/// Reconstruct path from came_from map (legacy, for backward compatibility)
 fn reconstruct_path(
     came_from: &HashMap<GridPos, (GridPos, Direction)>,
     goal: GridPos,
@@ -315,7 +499,29 @@ fn reconstruct_path(
     path
 }
 
-/// Convert a path of positions into belt placements with correct directions
+/// Reconstruct path from came_from map with move types (for underground support)
+fn reconstruct_path_with_moves(
+    came_from: &HashMap<GridPos, (GridPos, MoveType)>,
+    goal: GridPos,
+    start: GridPos,
+) -> Vec<(GridPos, Option<MoveType>)> {
+    let mut path = vec![(goal, None)];
+    let mut current = goal;
+
+    while current != start {
+        if let Some((parent, move_type)) = came_from.get(&current) {
+            path.push((*parent, Some(*move_type)));
+            current = *parent;
+        } else {
+            break;
+        }
+    }
+
+    path.reverse();
+    path
+}
+
+/// Convert a path of positions into belt placements with correct directions (legacy)
 fn path_to_belt_placements(path: &[GridPos]) -> Vec<BeltPlacement> {
     if path.len() < 2 {
         return vec![];
@@ -343,7 +549,77 @@ fn path_to_belt_placements(path: &[GridPos]) -> Vec<BeltPlacement> {
         placements.push(BeltPlacement {
             position: current.to_position(),
             direction,
+            kind: BeltKind::Surface,
         });
+    }
+
+    placements
+}
+
+/// Convert a path with move types into belt placements (with underground support)
+fn path_to_belt_placements_with_moves(
+    path: &[(GridPos, Option<MoveType>)],
+) -> Vec<BeltPlacement> {
+    if path.len() < 2 {
+        return vec![];
+    }
+
+    let mut placements = Vec::new();
+    let mut skip_next = false;
+
+    for i in 0..path.len() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+
+        let (current_pos, current_move) = &path[i];
+
+        // The move type tells us how to get from current_pos to the next position
+        match current_move {
+            Some(MoveType::Surface(direction)) => {
+                // Normal surface belt pointing in direction of travel
+                placements.push(BeltPlacement {
+                    position: current_pos.to_position(),
+                    direction: *direction,
+                    kind: BeltKind::Surface,
+                });
+            }
+            Some(MoveType::Underground { direction, .. }) => {
+                // Underground entry at current position
+                placements.push(BeltPlacement {
+                    position: current_pos.to_position(),
+                    direction: *direction,
+                    kind: BeltKind::UndergroundEntry,
+                });
+                // Underground exit at next position
+                if i + 1 < path.len() {
+                    let (next_pos, _) = &path[i + 1];
+                    placements.push(BeltPlacement {
+                        position: next_pos.to_position(),
+                        direction: *direction,
+                        kind: BeltKind::UndergroundExit,
+                    });
+                    skip_next = true; // Skip the next position since we just placed its belt
+                }
+            }
+            None => {
+                // Last position in path - determine direction from movement into this position
+                if i > 0 {
+                    let (prev_pos, prev_move) = &path[i - 1];
+                    // Use the direction from the previous move, or calculate from position delta
+                    let direction = match prev_move {
+                        Some(MoveType::Surface(d)) | Some(MoveType::Underground { direction: d, .. }) => *d,
+                        None => direction_from_delta(current_pos.x - prev_pos.x, current_pos.y - prev_pos.y),
+                    };
+                    placements.push(BeltPlacement {
+                        position: current_pos.to_position(),
+                        direction,
+                        kind: BeltKind::Surface,
+                    });
+                }
+            }
+        }
     }
 
     placements
@@ -650,5 +926,212 @@ mod tests {
         assert!(result.success);
         // Path along preferred tiles should be found
         assert_eq!(result.belt_count, 11); // 0,2 to 10,2 = 11 tiles
+    }
+
+    // === Underground Belt Tests ===
+
+    #[test]
+    fn test_underground_config_from_belt_type() {
+        // Test transport-belt -> underground-belt
+        let config = UndergroundConfig::from_belt_type("transport-belt");
+        assert!(config.is_some());
+        let config = config.unwrap();
+        assert_eq!(config.max_distance, 4);
+        assert_eq!(config.entity_name, "underground-belt");
+        assert_eq!(config.required_tech, "logistics");
+
+        // Test fast-transport-belt -> fast-underground-belt
+        let config = UndergroundConfig::from_belt_type("fast-transport-belt");
+        assert!(config.is_some());
+        let config = config.unwrap();
+        assert_eq!(config.max_distance, 6);
+        assert_eq!(config.entity_name, "fast-underground-belt");
+        assert_eq!(config.required_tech, "logistics-2");
+
+        // Test express-transport-belt -> express-underground-belt
+        let config = UndergroundConfig::from_belt_type("express-transport-belt");
+        assert!(config.is_some());
+        let config = config.unwrap();
+        assert_eq!(config.max_distance, 8);
+        assert_eq!(config.entity_name, "express-underground-belt");
+        assert_eq!(config.required_tech, "logistics-3");
+
+        // Test unknown belt type returns None
+        let config = UndergroundConfig::from_belt_type("unknown-belt");
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn test_underground_skips_obstacle() {
+        let bounds = Area {
+            left_top: Position { x: -10.0, y: -10.0 },
+            right_bottom: Position { x: 10.0, y: 10.0 },
+        };
+        let mut collision_map = CollisionMap::new(bounds);
+
+        // Block middle tiles (1,0), (2,0)
+        collision_map.block(GridPos::new(1, 0));
+        collision_map.block(GridPos::new(2, 0));
+
+        // Without underground: must go around (more belts, turns)
+        let result_no_underground = find_belt_route(
+            GridPos::new(0, 0),
+            GridPos::new(3, 0),
+            &collision_map,
+        );
+        assert!(result_no_underground.success);
+        assert!(result_no_underground.belt_count > 4); // Must go around
+        assert!(result_no_underground.turn_count >= 2); // At least 2 turns
+
+        // With underground: can go straight through
+        let options = RoutingOptions {
+            allow_underground: true,
+            underground_config: Some(UndergroundConfig {
+                max_distance: 4,
+                entity_name: "underground-belt".into(),
+                required_tech: "logistics".into(),
+            }),
+            underground_penalty: 0.5,
+            underground_skip_cost: 0.05,
+        };
+        let result_with_underground = find_belt_route_with_options(
+            GridPos::new(0, 0),
+            GridPos::new(3, 0),
+            &collision_map,
+            &options,
+        );
+        assert!(result_with_underground.success);
+        // Underground path: entry at 0,0 + exit at 3,0 = 2 placements
+        assert_eq!(result_with_underground.belt_count, 2);
+        assert_eq!(result_with_underground.underground_count, 1);
+        assert_eq!(result_with_underground.turn_count, 0);
+    }
+
+    #[test]
+    fn test_underground_respects_max_distance() {
+        let bounds = Area {
+            left_top: Position { x: -5.0, y: -5.0 },
+            right_bottom: Position { x: 15.0, y: 15.0 },
+        };
+        let mut collision_map = CollisionMap::new(bounds);
+
+        // Block tiles 1-8 (gap of 9 tiles)
+        for x in 1..9 {
+            collision_map.block(GridPos::new(x, 0));
+        }
+
+        // With transport-belt max_distance=4, cannot cross this gap underground
+        let options = RoutingOptions {
+            allow_underground: true,
+            underground_config: Some(UndergroundConfig {
+                max_distance: 4,
+                entity_name: "underground-belt".into(),
+                required_tech: "logistics".into(),
+            }),
+            underground_penalty: 0.5,
+            underground_skip_cost: 0.05,
+        };
+
+        let result = find_belt_route_with_options(
+            GridPos::new(0, 0),
+            GridPos::new(9, 0),
+            &collision_map,
+            &options,
+        );
+
+        // Should still find a path, but must go around since gap > max_distance
+        assert!(result.success);
+        // Either goes around, or uses multiple underground segments
+        // Either way, should have more than just entry+exit
+        assert!(result.belt_count > 2);
+    }
+
+    #[test]
+    fn test_underground_cost_calculation() {
+        // Test that underground is preferred when it saves tiles
+        let bounds = Area {
+            left_top: Position { x: -5.0, y: -5.0 },
+            right_bottom: Position { x: 15.0, y: 15.0 },
+        };
+        let collision_map = CollisionMap::new(bounds);
+
+        // With underground enabled, for a straight path of 5 tiles:
+        // Surface: 5 belts × 1.0 = 5.0
+        // Underground: 0.5 + (3 × 0.05) + 0.5 = 1.15
+        // Underground should be preferred
+
+        let options = RoutingOptions {
+            allow_underground: true,
+            underground_config: Some(UndergroundConfig {
+                max_distance: 6,
+                entity_name: "underground-belt".into(),
+                required_tech: "logistics".into(),
+            }),
+            underground_penalty: 0.5,
+            underground_skip_cost: 0.05,
+        };
+
+        let result = find_belt_route_with_options(
+            GridPos::new(0, 0),
+            GridPos::new(5, 0),
+            &collision_map,
+            &options,
+        );
+
+        assert!(result.success);
+        // Underground should be used since it's cheaper
+        // 2 placements: entry + exit
+        assert_eq!(result.belt_count, 2);
+        assert_eq!(result.underground_count, 1);
+    }
+
+    #[test]
+    fn test_underground_belt_kinds() {
+        let bounds = Area {
+            left_top: Position { x: -5.0, y: -5.0 },
+            right_bottom: Position { x: 15.0, y: 15.0 },
+        };
+        let mut collision_map = CollisionMap::new(bounds);
+        // Block middle to force underground
+        collision_map.block(GridPos::new(1, 0));
+
+        let options = RoutingOptions {
+            allow_underground: true,
+            underground_config: Some(UndergroundConfig {
+                max_distance: 4,
+                entity_name: "underground-belt".into(),
+                required_tech: "logistics".into(),
+            }),
+            underground_penalty: 0.5,
+            underground_skip_cost: 0.05,
+        };
+
+        let result = find_belt_route_with_options(
+            GridPos::new(0, 0),
+            GridPos::new(2, 0),
+            &collision_map,
+            &options,
+        );
+
+        assert!(result.success);
+        assert_eq!(result.belts.len(), 2);
+
+        // First belt should be underground entry
+        assert_eq!(result.belts[0].kind, BeltKind::UndergroundEntry);
+        assert_eq!(result.belts[0].direction, Direction::East);
+
+        // Second belt should be underground exit
+        assert_eq!(result.belts[1].kind, BeltKind::UndergroundExit);
+        assert_eq!(result.belts[1].direction, Direction::East);
+    }
+
+    #[test]
+    fn test_grid_pos_offset() {
+        let pos = GridPos::new(5, 5);
+
+        assert_eq!(pos.offset(Direction::North, 3), GridPos::new(5, 2));
+        assert_eq!(pos.offset(Direction::South, 3), GridPos::new(5, 8));
+        assert_eq!(pos.offset(Direction::East, 3), GridPos::new(8, 5));
+        assert_eq!(pos.offset(Direction::West, 3), GridPos::new(2, 5));
     }
 }
