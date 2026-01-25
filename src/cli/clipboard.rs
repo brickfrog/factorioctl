@@ -66,6 +66,18 @@ pub struct PasteCommand {
     #[arg(long)]
     pub from: Option<PathBuf>,
 
+    /// Rotate the blueprint (0, 90, 180, 270 degrees clockwise)
+    #[arg(long, default_value = "0")]
+    pub rotate: i32,
+
+    /// Flip horizontally (mirror on Y axis)
+    #[arg(long)]
+    pub flip_h: bool,
+
+    /// Flip vertically (mirror on X axis)
+    #[arg(long)]
+    pub flip_v: bool,
+
     /// Place as ghosts instead of real entities
     #[arg(long)]
     pub ghosts: bool,
@@ -190,22 +202,47 @@ pub async fn execute_paste(cmd: PasteCommand, conn: &ResolvedConnectionArgs) -> 
     // Parse target position
     let target = parse_position(&cmd.at)?;
 
+    // Normalize rotation to 0, 90, 180, or 270
+    let rotation = ((cmd.rotate % 360) + 360) % 360;
+    if rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270 {
+        anyhow::bail!("Rotation must be 0, 90, 180, or 270 degrees");
+    }
+
+    let transform_desc = if rotation != 0 || cmd.flip_h || cmd.flip_v {
+        let mut parts = Vec::new();
+        if rotation != 0 {
+            parts.push(format!("rotated {}°", rotation));
+        }
+        if cmd.flip_h {
+            parts.push("flipped horizontally".to_string());
+        }
+        if cmd.flip_v {
+            parts.push("flipped vertically".to_string());
+        }
+        format!(" ({})", parts.join(", "))
+    } else {
+        String::new()
+    };
+
     println!(
-        "Pasting {} entities at ({}, {})",
+        "Pasting {} entities at ({}, {}){}",
         blueprint.entities.len(),
         target.x,
-        target.y
+        target.y,
+        transform_desc
     );
 
     if cmd.dry_run {
         println!("\nDry run - would place:");
         for e in &blueprint.entities {
-            let abs_x = target.x + e.pos[0];
-            let abs_y = target.y + e.pos[1];
+            let (tx, ty) = transform_position(e.pos[0], e.pos[1], rotation, cmd.flip_h, cmd.flip_v);
+            let abs_x = target.x + tx;
+            let abs_y = target.y + ty;
+            let new_dir = transform_direction(&e.dir, rotation, cmd.flip_h, cmd.flip_v);
             let entity_type = if cmd.ghosts { "ghost" } else { "entity" };
             println!(
                 "  {} {} at ({:.1}, {:.1}) facing {}",
-                entity_type, e.name, abs_x, abs_y, e.dir
+                entity_type, e.name, abs_x, abs_y, new_dir
             );
         }
         client.close().await?;
@@ -217,11 +254,13 @@ pub async fn execute_paste(cmd: PasteCommand, conn: &ResolvedConnectionArgs) -> 
     let mut errors = Vec::new();
 
     for e in &blueprint.entities {
+        let (tx, ty) = transform_position(e.pos[0], e.pos[1], rotation, cmd.flip_h, cmd.flip_v);
         let abs_pos = Position {
-            x: target.x + e.pos[0],
-            y: target.y + e.pos[1],
+            x: target.x + tx,
+            y: target.y + ty,
         };
-        let direction = e.direction();
+        let new_dir_str = transform_direction(&e.dir, rotation, cmd.flip_h, cmd.flip_v);
+        let direction = parse_direction_str(&new_dir_str);
 
         let result = if cmd.ghosts {
             client.place_ghost(&e.name, abs_pos, direction).await
@@ -242,10 +281,10 @@ pub async fn execute_paste(cmd: PasteCommand, conn: &ResolvedConnectionArgs) -> 
                     entity.position.y
                 );
             }
-            Err(e) => {
+            Err(err) => {
                 errors.push(format!(
                     "Failed to place {} at ({:.1}, {:.1}): {}",
-                    e, abs_pos.x, abs_pos.y, e
+                    e.name, abs_pos.x, abs_pos.y, err
                 ));
             }
         }
@@ -314,4 +353,97 @@ fn direction_short_name(dir: u8) -> String {
         _ => "n",
     }
     .to_string()
+}
+
+/// Transform a position based on rotation and flip
+/// Rotation is clockwise in degrees (0, 90, 180, 270)
+fn transform_position(x: f64, y: f64, rotation: i32, flip_h: bool, flip_v: bool) -> (f64, f64) {
+    // Apply rotation first (clockwise)
+    let (rx, ry) = match rotation {
+        90 => (-y, x),   // 90° clockwise: (x,y) -> (-y, x)
+        180 => (-x, -y), // 180°: (x,y) -> (-x, -y)
+        270 => (y, -x),  // 270° clockwise: (x,y) -> (y, -x)
+        _ => (x, y),     // 0° or invalid
+    };
+
+    // Apply flips
+    let fx = if flip_h { -rx } else { rx };
+    let fy = if flip_v { -ry } else { ry };
+
+    (fx, fy)
+}
+
+/// Transform a direction string based on rotation and flip
+fn transform_direction(dir: &str, rotation: i32, flip_h: bool, flip_v: bool) -> String {
+    // Direction order: n=0, ne=1, e=2, se=3, s=4, sw=5, w=6, nw=7
+    let dir_index = match dir.to_lowercase().as_str() {
+        "n" | "north" => 0,
+        "ne" | "northeast" => 1,
+        "e" | "east" => 2,
+        "se" | "southeast" => 3,
+        "s" | "south" => 4,
+        "sw" | "southwest" => 5,
+        "w" | "west" => 6,
+        "nw" | "northwest" => 7,
+        _ => 0,
+    };
+
+    // Rotation adds to direction (clockwise)
+    let rotation_steps = rotation / 45;
+    let mut new_index = (dir_index + rotation_steps) % 8;
+
+    // Horizontal flip mirrors east-west (reflects across Y axis)
+    if flip_h {
+        new_index = match new_index {
+            1 => 7, // ne -> nw
+            2 => 6, // e -> w
+            3 => 5, // se -> sw
+            5 => 3, // sw -> se
+            6 => 2, // w -> e
+            7 => 1, // nw -> ne
+            x => x, // n, s stay same
+        };
+    }
+
+    // Vertical flip mirrors north-south (reflects across X axis)
+    if flip_v {
+        new_index = match new_index {
+            0 => 4, // n -> s
+            1 => 3, // ne -> se
+            3 => 1, // se -> ne
+            4 => 0, // s -> n
+            5 => 7, // sw -> nw
+            7 => 5, // nw -> sw
+            x => x, // e, w stay same
+        };
+    }
+
+    match new_index {
+        0 => "n",
+        1 => "ne",
+        2 => "e",
+        3 => "se",
+        4 => "s",
+        5 => "sw",
+        6 => "w",
+        7 => "nw",
+        _ => "n",
+    }
+    .to_string()
+}
+
+/// Parse direction string to Direction enum
+fn parse_direction_str(s: &str) -> crate::world::Direction {
+    use crate::world::Direction;
+    match s.to_lowercase().as_str() {
+        "n" | "north" => Direction::North,
+        "ne" | "northeast" => Direction::NorthEast,
+        "e" | "east" => Direction::East,
+        "se" | "southeast" => Direction::SouthEast,
+        "s" | "south" => Direction::South,
+        "sw" | "southwest" => Direction::SouthWest,
+        "w" | "west" => Direction::West,
+        "nw" | "northwest" => Direction::NorthWest,
+        _ => Direction::North,
+    }
 }
