@@ -74,7 +74,7 @@ async fn display_flying_text(client: &mut FactorioClient, message: &str) -> Resu
     let lua = format!(
         r#"
 local player = game.players[1]
-if player and player.connected and player.character and player.character.valid then
+if player and player.character and player.character.valid then
     player.create_local_flying_text{{
         text = "{}",
         position = {{ player.character.position.x, player.character.position.y - 2 }},
