@@ -800,6 +800,38 @@ if not inv or inv.get_item_count("{}") < 1 then
     return
 end
 
+-- Clear items on ground in placement area (they would be picked up during normal placement)
+local proto = prototypes.entity["{}"]
+if proto and proto.collision_box then
+    local cb = proto.collision_box
+    local clear_area = {{
+        {{ {} + cb.left_top.x - 0.1, {} + cb.left_top.y - 0.1 }},
+        {{ {} + cb.right_bottom.x + 0.1, {} + cb.right_bottom.y + 0.1 }}
+    }}
+    local items_on_ground = game.surfaces[1].find_entities_filtered{{
+        area = clear_area,
+        type = "item-entity"
+    }}
+    for _, item in pairs(items_on_ground) do
+        -- Try to pick up the item, or just destroy it if inventory is full
+        local stack = item.stack
+        if stack and stack.valid_for_read then
+            local inserted = c.insert(stack)
+            if inserted > 0 then
+                if inserted >= stack.count then
+                    item.destroy()
+                else
+                    stack.count = stack.count - inserted
+                end
+            else
+                item.destroy()
+            end
+        else
+            item.destroy()
+        end
+    end
+end
+
 -- Check if can place (use manual build check for proper collision detection)
 local can_place = game.surfaces[1].can_place_entity{{
     name = "{}",
@@ -863,11 +895,16 @@ else
 end
 "#,
             entity_name,       // inventory check
+            entity_name,       // clear items proto lookup
+            position.x,        // clear_area left_top x
+            position.y,        // clear_area left_top y
+            position.x,        // clear_area right_bottom x
+            position.y,        // clear_area right_bottom y
             entity_name,       // can_place_entity name
             position.x,        // can_place_entity position x
             position.y,        // can_place_entity position y
             direction.to_factorio(), // can_place_entity direction
-            entity_name,       // proto lookup
+            entity_name,       // double-check proto lookup
             position.x,        // check_area left_top x
             position.y,        // check_area left_top y
             position.x,        // check_area right_bottom x
