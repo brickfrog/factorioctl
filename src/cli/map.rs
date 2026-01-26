@@ -8,6 +8,9 @@ use crate::cli::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
 use crate::world::{Area, Entity, Position, Tile, TilePos};
 
+/// Power coverage map: (x, y) -> network display ID (1-9)
+pub type PowerCoverage = HashMap<(i32, i32), u8>;
+
 /// Execute the map command
 pub async fn execute(cmd: MapCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
     let mut client = FactorioClient::connect(&conn.host, conn.port, &conn.password).await?;
@@ -36,6 +39,10 @@ pub struct MapCommand {
     /// Detail level: minimal, normal, detailed
     #[arg(long, default_value = "normal")]
     pub detail: DetailLevel,
+
+    /// Show power coverage overlay with network IDs (1-9)
+    #[arg(long)]
+    pub show_power: bool,
 }
 
 /// Detail level for map rendering
@@ -81,8 +88,53 @@ impl MapCommand {
         // Get character position for marking
         let char_pos = client.get_character_position().await.ok();
 
+        // Query power coverage if requested
+        let power_coverage = if self.show_power {
+            let lua = crate::client::lua::LuaCommand::get_power_coverage(
+                center.x as i32,
+                center.y as i32,
+                self.radius,
+            );
+            match client.execute_lua(&lua).await {
+                Ok(result) => {
+                    // Parse the coverage data
+                    serde_json::from_str::<serde_json::Value>(&result)
+                        .ok()
+                        .and_then(|v| v.get("coverage").cloned())
+                        .and_then(|c| {
+                            if let serde_json::Value::Object(map) = c {
+                                let mut coverage: PowerCoverage = HashMap::new();
+                                for (key, val) in map {
+                                    if let Some((x_str, y_str)) = key.split_once(',') {
+                                        if let (Ok(x), Ok(y)) = (x_str.parse::<i32>(), y_str.parse::<i32>()) {
+                                            if let Some(id) = val.as_u64() {
+                                                coverage.insert((x, y), id as u8);
+                                            }
+                                        }
+                                    }
+                                }
+                                Some(coverage)
+                            } else {
+                                None
+                            }
+                        })
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
         // Render the map
-        let map = render_ascii_map(&entities, &tiles, &center, self.radius, char_pos.as_ref(), self.detail);
+        let map = render_ascii_map(
+            &entities,
+            &tiles,
+            &center,
+            self.radius,
+            char_pos.as_ref(),
+            self.detail,
+            power_coverage.as_ref(),
+        );
         println!("{}", map);
 
         Ok(())
@@ -234,6 +286,7 @@ pub fn render_ascii_map(
     radius: u32,
     char_pos: Option<&Position>,
     detail: DetailLevel,
+    power_coverage: Option<&PowerCoverage>,
 ) -> String {
     let r = radius as i32;
     let width = (radius * 2 + 1) as usize;
@@ -242,7 +295,30 @@ pub fn render_ascii_map(
     // Create grid initialized with dots
     let mut grid: Vec<Vec<char>> = vec![vec!['.'; width]; height];
 
-    // First pass: render terrain (water) as background
+    // Calculate world coordinates for the map area
+    let x_min = center.x as i32 - r;
+    let y_min = center.y as i32 - r;
+
+    // First pass: render power coverage as background (if provided)
+    if let Some(coverage) = power_coverage {
+        for gy in 0..height {
+            for gx in 0..width {
+                let world_x = x_min + gx as i32;
+                let world_y = y_min + gy as i32;
+                if let Some(&network_id) = coverage.get(&(world_x, world_y)) {
+                    // Use numbers 1-9 for network coverage
+                    let ch = if network_id > 0 && network_id <= 9 {
+                        char::from_digit(network_id as u32, 10).unwrap_or('.')
+                    } else {
+                        '+'
+                    };
+                    grid[gy][gx] = ch;
+                }
+            }
+        }
+    }
+
+    // Second pass: render terrain (water) - overwrites power coverage
     for tile in tiles {
         if tile.is_water() {
             let grid_x = (tile.position.x - center.x).round() as i32 + r;
@@ -324,9 +400,7 @@ pub fn render_ascii_map(
     let mut output = String::new();
 
     // Header with coordinates
-    let x_min = center.x as i32 - r;
     let x_max = center.x as i32 + r;
-    let y_min = center.y as i32 - r;
 
     output.push_str(&format!(
         "Map: ({},{}) to ({},{})\n",
@@ -335,7 +409,11 @@ pub fn render_ascii_map(
 
     // Legend
     output.push_str("Legend: @=you ^v<>=belt D=drill F=furnace A=assembler i=inserter\n");
-    output.push_str("        I=iron C=copper c=coal S=stone B=chest P=pole ~=water X=wreck o=rock\n\n");
+    output.push_str("        I=iron C=copper c=coal S=stone B=chest P=pole ~=water X=wreck o=rock\n");
+    if power_coverage.is_some() {
+        output.push_str("        1-9=power network coverage (network ID)\n");
+    }
+    output.push('\n');
 
     // X-axis labels (every 5 tiles)
     output.push_str("    ");

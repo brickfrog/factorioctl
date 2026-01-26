@@ -2164,34 +2164,164 @@ end
 
     // --- Power Network Commands ---
 
-    /// Get power status at a location
+    /// Get power status at a location (enhanced version with generator/consumer details)
     pub fn get_power_status(x: i32, y: i32, radius: u32) -> String {
         format!(
             r#"
 local surface = game.surfaces[1]
+local r = {}
+local area = {{ {{ {} - r, {} - r }}, {{ {} + r, {} + r }} }}
+
 local poles = surface.find_entities_filtered{{
     type = "electric-pole",
-    position = {{ {}, {} }},
-    radius = {}
+    area = area
 }}
 
 if #poles == 0 then
-    rcon.print('{{"error": "No electric poles found nearby"}}')
+    rcon.print('{{"error": "No electric poles found in area"}}')
     return
 end
 
+-- Find the network from the first pole
 local pole = poles[1]
-local network = pole.electric_network_id
-local stats = pole.electric_network_statistics
+local network_id = pole.electric_network_id
 
 local result = {{
-    network_id = network,
-    pole_position = {{ x = pole.position.x, y = pole.position.y }},
-    pole_name = pole.name
+    network_id = network_id,
+    pole_count = #poles,
+    generators = {{}},
+    consumers = {{
+        working = 0,
+        low_power = 0,
+        no_power = 0,
+        total = 0
+    }},
+    production_kw = 0,
+    consumption_kw = 0,
+    satisfaction = "unknown"
 }}
 
+-- Count generators by type in this network
+local generator_counts = {{}}
+local total_production = 0
+
+-- Find all generators (steam engines, solar panels, etc.)
+local generators = surface.find_entities_filtered{{
+    area = area,
+    type = {{ "generator", "solar-panel", "accumulator" }}
+}}
+
+for _, gen in pairs(generators) do
+    -- Check if connected to same network
+    local connected_pole = surface.find_entities_filtered{{
+        type = "electric-pole",
+        position = gen.position,
+        radius = 10,
+        limit = 1
+    }}[1]
+
+    if connected_pole and connected_pole.electric_network_id == network_id then
+        generator_counts[gen.name] = (generator_counts[gen.name] or 0) + 1
+
+        if gen.type == "generator" then
+            local energy = gen.energy_generated_last_tick or 0
+            total_production = total_production + energy * 60 / 1000
+        elseif gen.type == "solar-panel" then
+            total_production = total_production + 60 * surface.daytime
+        end
+    end
+end
+
+for name, count in pairs(generator_counts) do
+    table.insert(result.generators, {{ name = name, count = count }})
+end
+
+-- Find all electric consumers and check their status
+local consumer_types = {{ "assembling-machine", "furnace", "lab", "mining-drill", "inserter", "beacon", "radar" }}
+local total_consumption = 0
+local consumers_by_status = {{ working = {{}}, low_power = {{}}, no_power = {{}} }}
+
+for _, etype in pairs(consumer_types) do
+    local entities = surface.find_entities_filtered{{
+        area = area,
+        type = etype
+    }}
+
+    for _, ent in pairs(entities) do
+        -- Check if entity uses electricity
+        local proto = prototypes.entity[ent.name]
+        local uses_electric = false
+        pcall(function()
+            uses_electric = proto.electric_energy_source_prototype ~= nil
+        end)
+
+        if uses_electric then
+            result.consumers.total = result.consumers.total + 1
+
+            local status = ent.status
+            if status == defines.entity_status.no_power then
+                result.consumers.no_power = result.consumers.no_power + 1
+                table.insert(consumers_by_status.no_power, {{
+                    name = ent.name,
+                    x = ent.position.x,
+                    y = ent.position.y,
+                    unit_number = ent.unit_number
+                }})
+            elseif status == defines.entity_status.low_power then
+                result.consumers.low_power = result.consumers.low_power + 1
+                table.insert(consumers_by_status.low_power, {{
+                    name = ent.name,
+                    x = ent.position.x,
+                    y = ent.position.y,
+                    unit_number = ent.unit_number
+                }})
+            elseif status == defines.entity_status.working then
+                result.consumers.working = result.consumers.working + 1
+            end
+
+            -- Estimate consumption
+            pcall(function()
+                local usage = proto.energy_usage or 0
+                if status == defines.entity_status.working then
+                    total_consumption = total_consumption + usage * 60 / 1000
+                end
+            end)
+        end
+    end
+end
+
+result.production_kw = math.floor(total_production)
+result.consumption_kw = math.floor(total_consumption)
+
+-- Determine satisfaction
+if result.consumers.no_power > 0 then
+    result.satisfaction = "critical"
+elseif result.consumers.low_power > 0 then
+    result.satisfaction = "low"
+elseif result.consumers.working > 0 then
+    result.satisfaction = "ok"
+else
+    result.satisfaction = "idle"
+end
+
+-- Add sample of problem entities (up to 5 each)
+if #consumers_by_status.no_power > 0 then
+    result.no_power_entities = {{}}
+    for i = 1, math.min(5, #consumers_by_status.no_power) do
+        table.insert(result.no_power_entities, consumers_by_status.no_power[i])
+    end
+end
+
+if #consumers_by_status.low_power > 0 then
+    result.low_power_entities = {{}}
+    for i = 1, math.min(5, #consumers_by_status.low_power) do
+        table.insert(result.low_power_entities, consumers_by_status.low_power[i])
+    end
+end
+
+-- Get flow statistics if available
+local stats = pole.electric_network_statistics
 if stats then
-    -- Get flow statistics (last 5 seconds = 300 ticks)
     local input_flow = {{}}
     local output_flow = {{}}
 
@@ -2217,13 +2347,13 @@ if stats then
         end
     end
 
-    result.input_flow = input_flow
-    result.output_flow = output_flow
+    if #input_flow > 0 then result.input_flow = input_flow end
+    if #output_flow > 0 then result.output_flow = output_flow end
 end
 
 rcon.print(helpers.table_to_json(result))
 "#,
-            x, y, radius
+            radius, x, y, x, y
         )
         .trim()
         .to_string()
@@ -2254,7 +2384,7 @@ for _, pole in pairs(poles) do
             }}
         end
         networks[net_id].pole_count = networks[net_id].pole_count + 1
-        if #networks[net_id].poles < 3 then  -- Sample up to 3 poles
+        if #networks[net_id].poles < 3 then
             table.insert(networks[net_id].poles, {{
                 name = pole.name,
                 position = {{ x = pole.position.x, y = pole.position.y }}
@@ -2271,6 +2401,204 @@ end
 rcon.print(helpers.table_to_json(result))
 "#,
             radius, x, y, x, y
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Find power issues - entities without power or with low power
+    pub fn find_power_issues(x: i32, y: i32, radius: u32) -> String {
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local r = {}
+local area = {{ {{ {} - r, {} - r }}, {{ {} + r, {} + r }} }}
+
+local result = {{
+    unpowered_entities = {{}},
+    low_power_entities = {{}},
+    suggested_actions = {{}}
+}}
+
+-- Find all poles for coverage analysis
+local poles = surface.find_entities_filtered{{
+    type = "electric-pole",
+    area = area
+}}
+
+-- Build pole coverage map (which tiles have power)
+local coverage = {{}}
+local pole_supply_areas = {{
+    ["small-electric-pole"] = 2.5,
+    ["medium-electric-pole"] = 3.5,
+    ["big-electric-pole"] = 2.0,
+    ["substation"] = 9.0
+}}
+
+for _, pole in pairs(poles) do
+    local supply_dist = pole_supply_areas[pole.name] or 2.5
+    local px, py = math.floor(pole.position.x), math.floor(pole.position.y)
+    local sd = math.ceil(supply_dist)
+    for dx = -sd, sd do
+        for dy = -sd, sd do
+            if dx*dx + dy*dy <= supply_dist * supply_dist then
+                local key = (px + dx) .. "," .. (py + dy)
+                coverage[key] = pole.electric_network_id
+            end
+        end
+    end
+end
+
+-- Check all electric consumers
+local consumer_types = {{ "assembling-machine", "furnace", "lab", "mining-drill", "inserter", "beacon", "radar", "lamp", "roboport" }}
+
+for _, etype in pairs(consumer_types) do
+    local entities = surface.find_entities_filtered{{
+        area = area,
+        type = etype
+    }}
+
+    for _, ent in pairs(entities) do
+        -- Check if entity uses electricity
+        local proto = prototypes.entity[ent.name]
+        local uses_electric = false
+        pcall(function()
+            uses_electric = proto.electric_energy_source_prototype ~= nil
+        end)
+
+        if uses_electric then
+            local status = ent.status
+            local ex, ey = math.floor(ent.position.x), math.floor(ent.position.y)
+            local key = ex .. "," .. ey
+
+            if status == defines.entity_status.no_power then
+                table.insert(result.unpowered_entities, {{
+                    unit_number = ent.unit_number,
+                    name = ent.name,
+                    x = ent.position.x,
+                    y = ent.position.y,
+                    in_coverage = coverage[key] ~= nil
+                }})
+
+                -- Suggest action
+                if not coverage[key] then
+                    table.insert(result.suggested_actions,
+                        "Place pole near (" .. ex .. ", " .. ey .. ") to power " .. ent.name)
+                else
+                    table.insert(result.suggested_actions,
+                        ent.name .. " at (" .. ex .. ", " .. ey .. ") is in coverage but has no power - check generator capacity")
+                end
+            elseif status == defines.entity_status.low_power then
+                table.insert(result.low_power_entities, {{
+                    unit_number = ent.unit_number,
+                    name = ent.name,
+                    x = ent.position.x,
+                    y = ent.position.y
+                }})
+
+                table.insert(result.suggested_actions,
+                    ent.name .. " at (" .. ex .. ", " .. ey .. ") has low power - add more generators")
+            end
+        end
+    end
+end
+
+-- Summary
+result.summary = {{
+    unpowered_count = #result.unpowered_entities,
+    low_power_count = #result.low_power_entities,
+    pole_count = #poles
+}}
+
+-- Limit suggested actions to top 10
+if #result.suggested_actions > 10 then
+    local limited = {{}}
+    for i = 1, 10 do
+        limited[i] = result.suggested_actions[i]
+    end
+    result.suggested_actions = limited
+    result.summary.more_issues = #result.suggested_actions - 10
+end
+
+rcon.print(helpers.table_to_json(result))
+"#,
+            radius, x, y, x, y
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Get power coverage data for map visualization
+    pub fn get_power_coverage(x: i32, y: i32, radius: u32) -> String {
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local r = {}
+local area = {{ {{ {} - r, {} - r }}, {{ {} + r, {} + r }} }}
+
+-- Find all poles
+local poles = surface.find_entities_filtered{{
+    type = "electric-pole",
+    area = area
+}}
+
+-- Supply area distances for different pole types
+local pole_supply_areas = {{
+    ["small-electric-pole"] = 2.5,
+    ["medium-electric-pole"] = 3.5,
+    ["big-electric-pole"] = 2.0,
+    ["substation"] = 9.0
+}}
+
+-- Assign network IDs to single digits (1-9)
+local network_map = {{}}
+local next_id = 1
+
+local result = {{
+    poles = {{}},
+    coverage = {{}},
+    networks = {{}}
+}}
+
+for _, pole in pairs(poles) do
+    local net_id = pole.electric_network_id
+    if net_id and not network_map[net_id] then
+        network_map[net_id] = next_id
+        result.networks[tostring(next_id)] = net_id
+        next_id = next_id + 1
+        if next_id > 9 then next_id = 9 end
+    end
+
+    local supply_dist = pole_supply_areas[pole.name] or 2.5
+    local display_id = network_map[net_id] or 0
+
+    table.insert(result.poles, {{
+        name = pole.name,
+        x = pole.position.x,
+        y = pole.position.y,
+        network_id = net_id,
+        display_id = display_id,
+        supply_area = supply_dist
+    }})
+
+    local px, py = math.floor(pole.position.x), math.floor(pole.position.y)
+    local sd = math.ceil(supply_dist)
+    for dx = -sd, sd do
+        for dy = -sd, sd do
+            if dx*dx + dy*dy <= supply_dist * supply_dist then
+                local tx, ty = px + dx, py + dy
+                local key = tx .. "," .. ty
+                if tx >= {} - r and tx <= {} + r and ty >= {} - r and ty <= {} + r then
+                    result.coverage[key] = display_id
+                end
+            end
+        end
+    end
+end
+
+rcon.print(helpers.table_to_json(result))
+"#,
+            radius, x, y, x, y, x, x, y, y
         )
         .trim()
         .to_string()

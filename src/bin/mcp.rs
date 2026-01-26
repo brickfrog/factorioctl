@@ -344,6 +344,18 @@ pub struct PowerStatusParams {
 
 fn default_power_radius() -> u32 { 50 }
 
+/// Parameters for find_power_issues tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct FindPowerIssuesParams {
+    /// X coordinate of area center
+    pub x: i32,
+    /// Y coordinate of area center
+    pub y: i32,
+    /// Radius around center to check
+    #[serde(default = "default_power_radius")]
+    pub radius: u32,
+}
+
 /// Parameters for alerts tool
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct AlertsParams {
@@ -479,6 +491,9 @@ pub struct RenderMapParams {
     pub radius: u32,
     /// Detail level: "minimal", "normal", or "detailed" (default: "normal")
     pub detail: Option<String>,
+    /// Show power coverage overlay using network ID numbers (1-9)
+    #[serde(default)]
+    pub show_power: bool,
 }
 
 fn default_map_radius() -> u32 { 15 }
@@ -859,7 +874,8 @@ impl FactorioMcp {
     /// Render an ASCII map of an area.
     #[tool(description = "Render an ASCII map showing entities in an area. Returns a visual representation \
         useful for understanding layouts at a glance. Legend: @=you ^v<>=belt D=drill F=furnace A=assembler \
-        i=inserter I=iron C=copper c=coal S=stone B=chest P=pole ~=water X=wreck o=rock")]
+        i=inserter I=iron C=copper c=coal S=stone B=chest P=pole ~=water X=wreck o=rock. \
+        Use show_power=true to overlay power coverage with network ID numbers (1-9).")]
     async fn render_map(&self, Parameters(params): Parameters<RenderMapParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
@@ -901,8 +917,53 @@ impl FactorioMcp {
             _ => factorioctl::cli::DetailLevel::Normal,
         };
 
+        // Query power coverage if requested
+        let power_coverage = if params.show_power {
+            let lua = factorioctl::client::lua::LuaCommand::get_power_coverage(
+                center.x as i32,
+                center.y as i32,
+                params.radius
+            );
+            match client.execute_lua(&lua).await {
+                Ok(result) => {
+                    // Parse the coverage data
+                    serde_json::from_str::<serde_json::Value>(&result)
+                        .ok()
+                        .and_then(|v| v.get("coverage").cloned())
+                        .and_then(|c| {
+                            if let serde_json::Value::Object(map) = c {
+                                let mut coverage: std::collections::HashMap<(i32, i32), u8> = std::collections::HashMap::new();
+                                for (key, val) in map {
+                                    if let Some((x_str, y_str)) = key.split_once(',') {
+                                        if let (Ok(x), Ok(y)) = (x_str.parse::<i32>(), y_str.parse::<i32>()) {
+                                            if let Some(id) = val.as_u64() {
+                                                coverage.insert((x, y), id as u8);
+                                            }
+                                        }
+                                    }
+                                }
+                                Some(coverage)
+                            } else {
+                                None
+                            }
+                        })
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
         // Render the map
-        let map = factorioctl::cli::render_ascii_map(&entities, &tiles, &center, params.radius, char_pos.as_ref(), detail);
+        let map = factorioctl::cli::render_ascii_map(
+            &entities,
+            &tiles,
+            &center,
+            params.radius,
+            char_pos.as_ref(),
+            detail,
+            power_coverage.as_ref(),
+        );
         self.with_player_messages(map).await
     }
 
@@ -1646,6 +1707,24 @@ impl FactorioMcp {
         };
 
         let lua = factorioctl::client::lua::LuaCommand::get_power_networks(params.x, params.y, params.radius);
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Find power issues - entities without power or with low power.
+    #[tool(description = "Find actionable power problems: entities with no_power or low_power status, \
+        their positions, and suggested fixes (nearest pole location or need for more generators). \
+        Use this to diagnose and fix power grid issues.")]
+    async fn find_power_issues(&self, Parameters(params): Parameters<FindPowerIssuesParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = factorioctl::client::lua::LuaCommand::find_power_issues(params.x, params.y, params.radius);
         let result = match client.execute_lua(&lua).await {
             Ok(result) => result,
             Err(e) => format!("Error: {}", e),

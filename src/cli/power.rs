@@ -6,6 +6,7 @@ use clap::{Args, Subcommand};
 use super::parsing::parse_tile;
 use super::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
+use crate::client::lua::LuaCommand;
 use crate::world::Position;
 
 #[derive(Args, Debug)]
@@ -33,9 +34,47 @@ pub enum PowerSubcommand {
 
     /// Show power network status at a position
     Status {
-        /// Tile position to check (x,y as integers)
-        #[arg(allow_hyphen_values = true)]
-        at: String,
+        /// Center X coordinate
+        #[arg(long, allow_hyphen_values = true)]
+        x: i32,
+
+        /// Center Y coordinate
+        #[arg(long, allow_hyphen_values = true)]
+        y: i32,
+
+        /// Search radius
+        #[arg(long, default_value = "50")]
+        radius: u32,
+    },
+
+    /// Find power issues (unpowered/low-power entities)
+    Issues {
+        /// Center X coordinate
+        #[arg(long, allow_hyphen_values = true)]
+        x: i32,
+
+        /// Center Y coordinate
+        #[arg(long, allow_hyphen_values = true)]
+        y: i32,
+
+        /// Search radius
+        #[arg(long, default_value = "50")]
+        radius: u32,
+    },
+
+    /// Show all power networks in an area
+    Networks {
+        /// Center X coordinate
+        #[arg(long, allow_hyphen_values = true)]
+        x: i32,
+
+        /// Center Y coordinate
+        #[arg(long, allow_hyphen_values = true)]
+        y: i32,
+
+        /// Search radius
+        #[arg(long, default_value = "50")]
+        radius: u32,
     },
 }
 
@@ -132,33 +171,20 @@ pub async fn execute(cmd: PowerCommand, conn: &ResolvedConnectionArgs) -> Result
             println!("\nPlaced {} poles, {} failed", placed, failed);
         }
 
-        PowerSubcommand::Status { at } => {
-            let tile = parse_tile(&at)?;
-            let pos = tile.to_world_1x1();
+        PowerSubcommand::Status { x, y, radius } => {
+            let lua = LuaCommand::get_power_status(x, y, radius);
+            let response = client.execute_lua(&lua).await?;
+            println!("{}", response);
+        }
 
-            let lua = format!(
-                r#"
-local surface = game.surfaces[1]
-local poles = surface.find_entities_filtered{{
-    type = "electric-pole",
-    position = {{{}, {}}},
-    radius = 50
-}}
-if #poles == 0 then
-    rcon.print("No electric poles within 50 tiles")
-else
-    local nearest = poles[1]
-    local network = nearest.electric_network_id
-    local stats = nearest.electric_network_statistics
-    rcon.print("Nearest pole: " .. nearest.name .. " at " .. nearest.position.x .. "," .. nearest.position.y)
-    rcon.print("Network ID: " .. (network or "none"))
-    if stats then
-        rcon.print("Input: " .. (stats.input_counts and "tracked" or "not tracked"))
-    end
-end
-"#,
-                pos.x, pos.y
-            );
+        PowerSubcommand::Issues { x, y, radius } => {
+            let lua = LuaCommand::find_power_issues(x, y, radius);
+            let response = client.execute_lua(&lua).await?;
+            println!("{}", response);
+        }
+
+        PowerSubcommand::Networks { x, y, radius } => {
+            let lua = LuaCommand::get_power_networks(x, y, radius);
             let response = client.execute_lua(&lua).await?;
             println!("{}", response);
         }

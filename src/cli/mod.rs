@@ -33,7 +33,7 @@ pub mod walk_to;
 pub use crate::output::OutputFormat;
 
 // Re-export map rendering functions for MCP
-pub use map::{render_ascii_map, DetailLevel};
+pub use map::{render_ascii_map, DetailLevel, PowerCoverage};
 
 /// CLI tool for controlling Factorio headless servers via RCON
 #[derive(Parser, Debug)]

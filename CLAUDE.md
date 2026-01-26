@@ -340,3 +340,26 @@ cargo build --release
 - Faster iteration cycle for debugging
 
 **Note:** For negative coordinates, use `=` syntax: `--y=-21` not `--y -21`
+
+### Lua Code in lua.rs
+
+When writing Lua code strings in `src/client/lua.rs`:
+
+**NEVER use inline comments (comments after code on the same line):**
+```lua
+-- BAD: Inline comment will break when lines are joined
+local x = 5  -- this is a comment
+
+-- GOOD: Comment on its own line
+-- this is a comment
+local x = 5
+```
+
+**Why:** The `execute_lua` function joins all lines with spaces and strips lines starting with `--`.
+Inline comments like `code  -- comment` become `code  -- comment next_line_code` when joined,
+causing everything after `--` to be treated as a comment, breaking the Lua syntax.
+
+**Safe patterns:**
+- Comments on their own lines (will be stripped entirely)
+- No comments at all in complex logic
+- Use meaningful variable names instead of comments
