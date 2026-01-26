@@ -760,14 +760,17 @@ impl FactorioMcp {
                 let cx = entity.position.x.floor() as i32;
                 let cy = entity.position.y.floor() as i32;
 
-                // Calculate drop position based on direction
-                // Direction: 0=N, 4=E, 8=S, 12=W
-                let (drop_x, drop_y, dir_name) = match entity.direction {
-                    0 => (cx, cy - half_size - 1, "North"),  // North
-                    4 => (cx + half_size + 1, cy, "East"),   // East
-                    8 => (cx, cy + half_size + 1, "South"),  // South
-                    12 => (cx - half_size - 1, cy, "West"),  // West
-                    _ => (cx + half_size + 1, cy, "East"),   // Default to east
+                // Calculate belt tile based on direction
+                // Empirically tested: items drop just past the drill edge with a perpendicular offset
+                // For East-facing 2x2 drill at (42,-97): items drop at (43.3,-97.5) -> belt at (43,-98)
+                // Belt tile = floor(drop_position), which is 1 tile past edge in facing direction,
+                // and 1 tile offset perpendicular (toward negative on the perpendicular axis)
+                let (belt_x, belt_y, dir_name) = match entity.direction {
+                    0 => (cx - 1, cy - half_size, "North"),  // North: belt north of drill, offset west
+                    4 => (cx + half_size, cy - 1, "East"),   // East: belt east of drill, offset north
+                    8 => (cx - 1, cy + half_size, "South"),  // South: belt south of drill, offset west
+                    12 => (cx - half_size, cy - 1, "West"),  // West: belt west of drill, offset north
+                    _ => (cx + half_size, cy - 1, "East"),   // Default to east
                 };
 
                 let result = serde_json::json!({
@@ -781,19 +784,18 @@ impl FactorioMcp {
                         "size": drill_size
                     },
                     "output": {
-                        "drop_position": { "x": drop_x, "y": drop_y },
-                        "belt_tile": { "x": drop_x, "y": drop_y },
+                        "belt_tile": { "x": belt_x, "y": belt_y },
                         "belt_direction": entity.direction,
                         "description": format!(
-                            "Place belt at tile ({}, {}) facing {} to catch drill output (calculated fallback)",
-                            drop_x, drop_y, dir_name
+                            "Place belt at tile ({}, {}) facing {} to catch drill output",
+                            belt_x, belt_y, dir_name
                         )
                     },
                     "routing_tip": format!(
                         "To connect this drill: route_belt from_x={} from_y={} to_x=<destination> to_y=<destination>",
-                        drop_x, drop_y
+                        belt_x, belt_y
                     ),
-                    "note": "Output position calculated from drill size and direction (Lua query failed)"
+                    "note": "Belt tile calculated from drill size and direction"
                 });
 
                 return self.with_player_messages(serde_json::to_string_pretty(&result).unwrap_or_default()).await;
