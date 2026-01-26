@@ -114,9 +114,21 @@ This searches within 200 tiles from your position (or a specified position) and 
 
 ### Clearing Space
 
-- Use `clear_area` to remove trees and rocks before building
-- Always do a dry_run first to see what will be cleared
+Use `clear_area` to remove trees and rocks before building:
+
+```
+clear_area x1=55 y1=-83 x2=65 y2=-73 dry_run=true   # Preview what will be cleared
+clear_area x1=55 y1=-83 x2=65 y2=-73                # Actually clear the area
+```
+
+**Requirements:**
+- Character must be within 30 tiles of the area center
+- Returns: trees_found, trees_mined, rocks_found, rocks_mined, items_gained
+
+**Tips:**
+- Always do a `dry_run=true` first to see what will be cleared
 - Clear the area for your zone before placing entities
+- Gained items (wood, stone, coal) go into character inventory
 
 ### Thinking Fresh About Layouts
 
