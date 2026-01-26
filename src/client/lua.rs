@@ -867,30 +867,8 @@ if not can_place then
     return
 end
 
--- Double-check for overlapping entities (can_place_entity may miss some cases)
--- Use prototypes.entity for Factorio 2.0 compatibility
-local proto = prototypes.entity["{}"]
-if proto and proto.collision_box then
-    local cb = proto.collision_box
-    local check_area = {{
-        {{ {} + cb.left_top.x, {} + cb.left_top.y }},
-        {{ {} + cb.right_bottom.x, {} + cb.right_bottom.y }}
-    }}
-    local overlapping = game.surfaces[1].find_entities_filtered{{
-        area = check_area
-    }}
-    -- Filter out resources (can build on ore) and the character
-    local blocking = {{}}
-    for _, ent in pairs(overlapping) do
-        if ent.type ~= "resource" and ent.type ~= "character" and ent.type ~= "item-entity" then
-            table.insert(blocking, ent.name)
-        end
-    end
-    if #blocking > 0 then
-        rcon.print('{{"error": "Position blocked by: ' .. table.concat(blocking, ", ") .. '"}}')
-        return
-    end
-end
+-- Note: can_place_entity with build_check_type.manual handles collision detection properly
+-- using actual collision masks, not just bounding box overlap
 
 -- Create the entity
 local e = game.surfaces[1].create_entity{{
@@ -925,11 +903,6 @@ end
             position.x,        // can_place_entity position x
             position.y,        // can_place_entity position y
             direction.to_factorio(), // can_place_entity direction
-            entity_name,       // double-check proto lookup
-            position.x,        // check_area left_top x
-            position.y,        // check_area left_top y
-            position.x,        // check_area right_bottom x
-            position.y,        // check_area right_bottom y
             entity_name,       // create_entity name
             position.x,        // create_entity position x
             position.y,        // create_entity position y
