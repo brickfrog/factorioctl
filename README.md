@@ -12,23 +12,31 @@ This repo contains the code for a CLI tool "like kubectl" and an MCP server for 
 
 ## Background
 
-After reading [Ramp's RCT agent](https://labs.ramp.com/rct) article, I wanted to give it a try too. I thought some problems they described would be more easily solvable. Spatial layout is a major pain point despite a lot of focused effort to add more tools to help here. More tools help, but it's fundamentally very difficult to get LLMs to solve these problems.
+After reading [Ramp's RCT agent](https://labs.ramp.com/rct) article, I wanted to give it a try too. I thought some problems they described would be more easily solvable. The stuff about the ASCII map stood out to me. I thought relying more on the tool and graphs would have a lot of tangible gains. The problem, I thought, was relying too much on the LLM agent. But the truth is that spatial layout is just a major pain point. I made a lot of focused effort to add more tools to help here, and they did help, but it's just fundamentally very difficult to get LLMs to solve these problems.
 
-Big shout out to [rberg27/doom-coding](https://github.com/rberg27/doom-coding) which is how I vibe coded this on my phone and what got me interested in trying out vibe coding for real.
+Also big shout out to [rberg27/doom-coding](https://github.com/rberg27/doom-coding) which is how I vibe coded this on my phone and what got me interested in trying out vibe coding for real.
 
 ## Lessons Learned
 
 **Examples and hand-holding go a long way**. Left to its own devices, Claude will happily destroy your code and break your correct unit tests with the belief that it's fixing things. Getting into the game and laying things out (i.e. NESW all orientations of drills with belts at their drop zones) lets Claude have a solid baseline from which it can debug and fix everything. If I were doing this again, I'd build from the ground up with exhaustive examples of all foundational behaviors from the very start, have them committed and running as test cases.
 
-For gameplay, **speed is key**. Claude Sonnet is much less intelligent but it's more entertaining to watch play. I didn't get to sub-agents or having an async task orchestration system for the gameplay so at least for a single LLM sending commands, speed is more important than making good decisions.
+For gameplay, **speed is key**. Claude Sonnet makes worse decisions but it's more entertaining to watch play. Gameplay involves thousands of decisions and even more tool calls. The faster those happen, the better. This may be solvable in the agent loop itself; I didn't get to sub-agents or having an async task orchestration system for the gameplay but I think that's a worthwhile thing to investigate here. So at least for a single LLM sending commands, speed is more important than making good decisions.
 
-**Creativity is heavily rewarded with vibe coding**. There's often little correlation between effort and reward.  If you can suggest the right idea, Claude can have it implemented in minutes and it can have a huge impact. Other ideas take a long time to get working and have much less impact. There's an art to finding this balance.
+**Creativity is heavily rewarded with vibe coding**. There's often little correlation between effort and reward for features I added. If you can suggest the right idea, Claude can have it implemented in minutes and it can have a huge impact. Other ideas take a long time to get working and have much less impact. There's an art to finding this balance.
 
 **LLMs are pretty clever**: the more generic and multi-use a tool is, the more it will be used in surprising ways.
+
+**Offloading tasks from the LLM is the key**. This was the guiding idea for this project and I think, despite the issues, I've validated this idea. Just like humans want to use a calculator to do arithmetic, your LLM wants to use tools to solve hard problems. Don't make your LLM do path finding. It will take forever and be bad at it, just give it A*. Finding the right layer to make these "calculators" for the LLM at is where all the leverage is.
 
 **CLAUDE.md and prompts are critical**. Mixing CLAUDE.md rules for both coding and playing the game is a mistake. The prompting and rules have a huge impact in how the agent will play the game. In some ways the agent shown in the YouTube video is more entertaining than what's in the repo at the time of writing. I think there are huge gains to be made here by refocusing on what's most important.
 
 **Claude likes MCP a lot more than CLI tools** but iterating with MCP is annoying, you have to constantly restart claude. MCP seemed to help make Claude play the game much more actively and responsively (though I did make multiple changes when adding MCP so I may be misattributing the gains to that).
+
+**Claude code has a very limited understanding of planning in space**. When playing the game, the agents have no real understanding of **why** anything is where it is. They typically with either ignore it or assume it's perfect and that it can't be touched. That's why I experimented with adding the concept of zones to let the agent reserve areas of the map for a purpose. Otherwise it will simply place objects down wherever it happens to be standing in a way that makes no sense. Any notion of planning ahead in physical space is not something Claude will do on its own. A plan to Claude Code seems to really just be a sequences of steps without a lot of the context that you might expect given how intuitively we operate in physical space. For example, it can't really remember that it was intending to do X at location Y. Or correct obviously bad decisions related to spaghettification. It has no real native sense that a non-reified (or even semi-reified) concept like an ore patch should be used for mining and that covering it in assemblers is a waste.
+
+**Vibe coding has diminishing returns**. As the project went on, it seemed like the agent's gains really slowed down. This may be the vibe coded system starting to collapse under its own weight, the limits of Claude Code to play a game with the types of intefraces (and prompts) provided, or perhaps it was just that my suggestions just got worse as the code base grew; because despite never reading any of the code, I still gave a lot of advice about it. That said:
+
+**Vibe coding is very fun**. Claude Code is the best game you'll play in 2026. It's unbelievably fun to make something from nothing from your phone while going out for a walk or doing something else. If you have a lot of ideas I strongly recommend dumping them on an AI agent rather than letting them be forgotten. You won't get anything too useful out of it, at least not yet, but you will get **something** -- and you'll have a great time!
 
 ## Quick Start
 
