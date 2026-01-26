@@ -292,3 +292,30 @@ route_belt from_x=10 from_y=5 to_x=20 to_y=5 extend_existing=true
 - Without `extend_existing`: Fails if start/end positions have belts (blocked)
 - With `extend_existing`: Treats existing belts as valid connection points
 - Skips placing belts at positions that already have compatible belts
+
+## Development & Debugging
+
+### Use CLI for Quick Debugging
+
+When debugging code changes, **always use the CLI instead of MCP tools**:
+
+```bash
+# Build and test immediately
+cargo build --release
+
+# Test with CLI (uses latest binary)
+./target/release/factorioctl --host localhost --port 27016 --password test_password <command>
+
+# Examples:
+./target/release/factorioctl ... analyze belt-sources --x=58 --y=-21 --output json
+./target/release/factorioctl ... get entities --area "55,-24,65,-18" --output json
+./target/release/factorioctl ... map --x=58 --y=-21 --radius=10
+```
+
+**Why CLI over MCP:**
+- MCP server runs as a long-lived process - won't pick up code changes until restarted
+- CLI uses the binary directly - always tests latest code after `cargo build`
+- CLI output goes directly to terminal - easier to see full JSON output
+- Faster iteration cycle for debugging
+
+**Note:** For negative coordinates, use `=` syntax: `--y=-21` not `--y -21`

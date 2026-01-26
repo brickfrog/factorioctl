@@ -33,6 +33,8 @@ pub enum ItemSourceType {
 pub struct ItemSource {
     /// Position of the source entity
     pub position: TilePos,
+    /// Calculated output/drop position (where items are placed onto the belt)
+    pub output_position: Option<TilePos>,
     /// Type of source
     pub source_type: ItemSourceType,
     /// Entity name (e.g., "burner-mining-drill", "inserter")
@@ -98,6 +100,7 @@ pub fn trace_belt_sources(
     let mut right_lane_sources = Vec::new();
     let mut both_lane_sources = Vec::new();
     let mut all_possible_items: HashSet<String> = HashSet::new();
+    let mut seen_unit_numbers: HashSet<u32> = HashSet::new();
 
     // Check each upstream belt position for feeding entities
     for belt_pos in &upstream_belts {
@@ -106,6 +109,14 @@ pub fn trace_belt_sources(
             let sources = find_sources_for_belt(*belt_pos, belt_node.direction, &entity_map, graph);
 
             for source in sources {
+                // Deduplicate by unit_number (same entity found for multiple belt tiles)
+                if let Some(unit_num) = source.unit_number {
+                    if seen_unit_numbers.contains(&unit_num) {
+                        continue;
+                    }
+                    seen_unit_numbers.insert(unit_num);
+                }
+
                 // Collect possible items
                 for item in &source.possible_items {
                     all_possible_items.insert(item.clone());
@@ -186,39 +197,25 @@ fn find_sources_for_belt(
     belt_pos: TilePos,
     belt_direction: Direction,
     entity_map: &HashMap<TilePos, Vec<&Entity>>,
-    graph: &BeltGraph,
+    _graph: &BeltGraph,
 ) -> Vec<ItemSource> {
     let mut sources = Vec::new();
 
-    // Check all adjacent positions for feeding entities
-    let adjacent_positions = [
-        belt_pos.offset_in_direction(Direction::North),
-        belt_pos.offset_in_direction(Direction::East),
-        belt_pos.offset_in_direction(Direction::South),
-        belt_pos.offset_in_direction(Direction::West),
-    ];
+    // Check positions within range for feeding entities
+    // Use radius 3 to catch 2x2 and 3x3 machines that might output to this belt
+    for dx in -3..=3 {
+        for dy in -3..=3 {
+            let check_pos = TilePos::new(belt_pos.x + dx, belt_pos.y + dy);
+            if let Some(entities) = entity_map.get(&check_pos) {
+                for entity in entities {
+                    // Skip belts - they're handled by the graph
+                    if entity.name.contains("belt") {
+                        continue;
+                    }
 
-    for adj_pos in &adjacent_positions {
-        if let Some(entities) = entity_map.get(adj_pos) {
-            for entity in entities {
-                // Skip belts - they're handled by the graph
-                if entity.name.contains("belt") {
-                    continue;
-                }
-
-                if let Some(source) = entity_to_source(entity, belt_pos, belt_direction) {
-                    sources.push(source);
-                }
-            }
-        }
-    }
-
-    // Also check the belt position itself (for items placed directly, like from drills)
-    if let Some(entities) = entity_map.get(&belt_pos) {
-        for entity in entities {
-            if !entity.name.contains("belt") {
-                if let Some(source) = entity_to_source(entity, belt_pos, belt_direction) {
-                    sources.push(source);
+                    if let Some(source) = entity_to_source(entity, belt_pos, belt_direction) {
+                        sources.push(source);
+                    }
                 }
             }
         }
@@ -246,6 +243,7 @@ fn find_sources_for_belt(
                         let lane = determine_inserter_lane(search_pos, belt_pos, belt_direction);
                         sources.push(ItemSource {
                             position: search_pos,
+                            output_position: Some(drop_pos),
                             source_type: ItemSourceType::Inserter,
                             entity_name: entity.name.clone(),
                             unit_number: entity.unit_number,
@@ -274,15 +272,34 @@ fn entity_to_source(
     match entity_type {
         "mining-drill" => {
             // Mining drills output in their facing direction
+            // Drop positions are at fractional coordinates that can span tile boundaries
+            // We check if the belt is in the general output direction and close enough
             let drill_dir = Direction::from_factorio(entity.direction);
-            let output_pos = entity_pos.offset_in_direction(drill_dir);
 
-            if output_pos == belt_pos {
-                // Determine which lane based on position relative to belt
+            // Check if drill is facing toward the belt
+            let dx = belt_pos.x - entity_pos.x;
+            let dy = belt_pos.y - entity_pos.y;
+
+            let facing_belt = match drill_dir {
+                Direction::North => dy < 0 && dx.abs() <= 1,
+                Direction::South => dy > 0 && dx.abs() <= 1,
+                Direction::East => dx > 0 && dy.abs() <= 1,
+                Direction::West => dx < 0 && dy.abs() <= 1,
+                _ => false,
+            };
+
+            // For burner drills (2x2), output is ~1-2 tiles from center
+            // For electric drills (3x3), output is ~2 tiles from center
+            let max_distance = if entity.name.contains("burner") { 2 } else { 3 };
+            let distance = dx.abs().max(dy.abs());
+
+            if facing_belt && distance <= max_distance {
                 let lane = determine_output_lane(entity_pos, belt_pos, belt_direction);
+                let output_pos = TilePos::new(belt_pos.x, belt_pos.y); // Belt position is where items land
 
                 Some(ItemSource {
                     position: entity_pos,
+                    output_position: Some(output_pos),
                     source_type: ItemSourceType::MiningDrill,
                     entity_name: entity.name.clone(),
                     unit_number: entity.unit_number,
@@ -301,6 +318,7 @@ fn entity_to_source(
         "splitter" => {
             Some(ItemSource {
                 position: entity_pos,
+                output_position: Some(belt_pos),
                 source_type: ItemSourceType::Splitter,
                 entity_name: entity.name.clone(),
                 unit_number: entity.unit_number,
@@ -317,6 +335,7 @@ fn entity_to_source(
             if output_pos == belt_pos {
                 Some(ItemSource {
                     position: entity_pos,
+                    output_position: Some(output_pos),
                     source_type: ItemSourceType::UndergroundBeltExit,
                     entity_name: entity.name.clone(),
                     unit_number: entity.unit_number,
