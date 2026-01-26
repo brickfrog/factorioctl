@@ -835,9 +835,10 @@ impl FactorioMcp {
         let input_belt_y = cy + half_h + 1;
         let input_inserter_y = cy + half_h;  // On the south edge tile
 
-        // Output belt goes 1 tile beyond north edge (for inserter gap)
-        let output_belt_y = cy - half_h - 1;
-        let output_inserter_y = cy - half_h;  // On the north edge tile (adjusted from -1)
+        // Output belt goes 2 tiles beyond north edge (belt, then inserter, then furnace)
+        // For furnace at cy=-107 with half_h=1: inserter at -109, belt at -110
+        let output_belt_y = cy - half_h - 2;
+        let output_inserter_y = cy - half_h - 1;
 
         let result = serde_json::json!({
             "entity_type": "machine",
