@@ -99,6 +99,17 @@ pub struct GetResourcesParams {
     pub resource_type: Option<String>,
 }
 
+/// Parameters for find_nearest_resource tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct FindNearestResourceParams {
+    /// Resource type to find (e.g., 'iron-ore', 'copper-ore', 'coal', 'stone')
+    pub resource_type: String,
+    /// X coordinate to search from (default: character position)
+    pub x: Option<f64>,
+    /// Y coordinate to search from (default: character position)
+    pub y: Option<f64>,
+}
+
 /// Parameters for position-based tools
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PositionParams {
@@ -726,6 +737,51 @@ impl FactorioMcp {
                 });
 
                 return self.with_player_messages(serde_json::to_string_pretty(&result).unwrap_or_default()).await;
+            } else {
+                // Lua failed - calculate output position from direction and size
+                // Burner-mining-drills are 2x2, electric are 3x3
+                let drill_size = if entity.name.contains("burner") { 2 } else { 3 };
+                let half_size = drill_size / 2;
+                let cx = entity.position.x.floor() as i32;
+                let cy = entity.position.y.floor() as i32;
+
+                // Calculate drop position based on direction
+                // Direction: 0=N, 4=E, 8=S, 12=W
+                let (drop_x, drop_y, dir_name) = match entity.direction {
+                    0 => (cx, cy - half_size - 1, "North"),  // North
+                    4 => (cx + half_size + 1, cy, "East"),   // East
+                    8 => (cx, cy + half_size + 1, "South"),  // South
+                    12 => (cx - half_size - 1, cy, "West"),  // West
+                    _ => (cx + half_size + 1, cy, "East"),   // Default to east
+                };
+
+                let result = serde_json::json!({
+                    "entity_type": "mining-drill",
+                    "drill": {
+                        "unit_number": entity.unit_number,
+                        "name": entity.name,
+                        "position": { "x": cx, "y": cy },
+                        "facing": dir_name,
+                        "direction": entity.direction,
+                        "size": drill_size
+                    },
+                    "output": {
+                        "drop_position": { "x": drop_x, "y": drop_y },
+                        "belt_tile": { "x": drop_x, "y": drop_y },
+                        "belt_direction": entity.direction,
+                        "description": format!(
+                            "Place belt at tile ({}, {}) facing {} to catch drill output (calculated fallback)",
+                            drop_x, drop_y, dir_name
+                        )
+                    },
+                    "routing_tip": format!(
+                        "To connect this drill: route_belt from_x={} from_y={} to_x=<destination> to_y=<destination>",
+                        drop_x, drop_y
+                    ),
+                    "note": "Output position calculated from drill size and direction (Lua query failed)"
+                });
+
+                return self.with_player_messages(serde_json::to_string_pretty(&result).unwrap_or_default()).await;
             }
         }
 
@@ -803,7 +859,7 @@ impl FactorioMcp {
     /// Render an ASCII map of an area.
     #[tool(description = "Render an ASCII map showing entities in an area. Returns a visual representation \
         useful for understanding layouts at a glance. Legend: @=you ^v<>=belt D=drill F=furnace A=assembler \
-        i=inserter I=iron C=copper c=coal S=stone B=chest P=pole")]
+        i=inserter I=iron C=copper c=coal S=stone B=chest P=pole ~=water X=wreck o=rock")]
     async fn render_map(&self, Parameters(params): Parameters<RenderMapParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
@@ -832,6 +888,9 @@ impl FactorioMcp {
             Err(e) => return self.with_player_messages(format!("Error getting entities: {}", e)).await,
         };
 
+        // Query tiles for water/terrain
+        let tiles = client.get_tiles(area).await.unwrap_or_default();
+
         // Get character position for marking
         let char_pos = client.get_character_position().await.ok();
 
@@ -843,7 +902,7 @@ impl FactorioMcp {
         };
 
         // Render the map
-        let map = factorioctl::cli::render_ascii_map(&entities, &center, params.radius, char_pos.as_ref(), detail);
+        let map = factorioctl::cli::render_ascii_map(&entities, &tiles, &center, params.radius, char_pos.as_ref(), detail);
         self.with_player_messages(map).await
     }
 
@@ -875,6 +934,48 @@ impl FactorioMcp {
                 serde_json::to_string_pretty(&info).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Find the nearest resource patch of a specific type.
+    #[tool(description = "Find the nearest resource patch (ore, oil) of a specific type from a position. \
+        Returns the patch center, total amount, tile count, and bounding box. Searches within 200 tiles. \
+        Use this to locate resources for mining operations.")]
+    async fn find_nearest_resource(&self, Parameters(params): Parameters<FindNearestResourceParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        // Get search origin - use provided position or character position
+        let from = if let (Some(x), Some(y)) = (params.x, params.y) {
+            Position::new(x, y)
+        } else {
+            match client.get_character_position().await {
+                Ok(pos) => pos,
+                Err(e) => return self.with_player_messages(format!("Error getting position: {}", e)).await,
+            }
+        };
+
+        let result = match client.find_nearest_resource(&params.resource_type, from).await {
+            Ok(resource) => {
+                let bb = &resource.bounding_box;
+                let info = serde_json::json!({
+                    "name": resource.name,
+                    "center_x": resource.center.x,
+                    "center_y": resource.center.y,
+                    "total_amount": resource.total_amount,
+                    "tile_count": resource.tile_count,
+                    "bounding_box": {
+                        "left_top": { "x": bb.left_top.x, "y": bb.left_top.y },
+                        "right_bottom": { "x": bb.right_bottom.x, "y": bb.right_bottom.y }
+                    },
+                    "distance": ((resource.center.x - from.x).powi(2) + (resource.center.y - from.y).powi(2)).sqrt(),
+                });
+                serde_json::to_string_pretty(&info).unwrap_or_else(|e| format!("Error: {}", e))
+            }
+            Err(e) => format!("No {} found within 200 tiles: {}", params.resource_type, e),
         };
         self.with_player_messages(result).await
     }

@@ -67,8 +67,20 @@ When `walk_to` fails with "Blocked or stuck":
 
 ## Factory Organization
 
+### Finding Resources
+
+Use `find_nearest_resource` to locate the closest resource patch of a specific type:
+
+```
+find_nearest_resource resource_type="iron-ore"
+-> Returns: center, total_amount, tile_count, bounding_box, distance
+```
+
+This searches within 200 tiles from your position (or a specified position) and returns the full patch info including its bounding box.
+
 ### Before Building
 
+- Use `find_nearest_resource` to locate nearby ore patches for mining operations
 - Use `scan_resources` to detect and protect ore patches in your work area
 - Use `check_placement` before placing buildings to avoid bad locations
 - Create zones with `create_zone` to organize your factory (mining, smelting, assembly)

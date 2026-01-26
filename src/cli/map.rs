@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::cli::ResolvedConnectionArgs;
 use crate::client::FactorioClient;
-use crate::world::{Area, Entity, Position, TilePos};
+use crate::world::{Area, Entity, Position, Tile, TilePos};
 
 /// Execute the map command
 pub async fn execute(cmd: MapCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
@@ -75,11 +75,14 @@ impl MapCommand {
         // Query entities in the area
         let entities = client.find_entities(area, None, None).await?;
 
+        // Query tiles for water/terrain
+        let tiles = client.get_tiles(area).await.unwrap_or_default();
+
         // Get character position for marking
         let char_pos = client.get_character_position().await.ok();
 
         // Render the map
-        let map = render_ascii_map(&entities, &center, self.radius, char_pos.as_ref(), self.detail);
+        let map = render_ascii_map(&entities, &tiles, &center, self.radius, char_pos.as_ref(), self.detail);
         println!("{}", map);
 
         Ok(())
@@ -226,6 +229,7 @@ fn direction_arrow(direction: u8) -> char {
 /// Render entities as ASCII map
 pub fn render_ascii_map(
     entities: &[Entity],
+    tiles: &[Tile],
     center: &Position,
     radius: u32,
     char_pos: Option<&Position>,
@@ -237,6 +241,17 @@ pub fn render_ascii_map(
 
     // Create grid initialized with dots
     let mut grid: Vec<Vec<char>> = vec![vec!['.'; width]; height];
+
+    // First pass: render terrain (water) as background
+    for tile in tiles {
+        if tile.is_water() {
+            let grid_x = (tile.position.x - center.x).round() as i32 + r;
+            let grid_y = (tile.position.y - center.y).round() as i32 + r;
+            if grid_x >= 0 && grid_x < width as i32 && grid_y >= 0 && grid_y < height as i32 {
+                grid[grid_y as usize][grid_x as usize] = '~';
+            }
+        }
+    }
 
     // Place entities on grid
     // Group entities by integer position to handle overlaps
@@ -319,8 +334,8 @@ pub fn render_ascii_map(
     ));
 
     // Legend
-    output.push_str("Legend: @=you ^v<>=belt D=drill F=furnace i=inserter\n");
-    output.push_str("        I=iron C=copper c=coal S=stone B=chest X=obstacle o=rock\n\n");
+    output.push_str("Legend: @=you ^v<>=belt D=drill F=furnace A=assembler i=inserter\n");
+    output.push_str("        I=iron C=copper c=coal S=stone B=chest P=pole ~=water X=wreck o=rock\n\n");
 
     // X-axis labels (every 5 tiles)
     output.push_str("    ");
