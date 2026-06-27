@@ -70,9 +70,6 @@ impl FactorioClient {
             .map(|c| c.debug_commands)
             .unwrap_or(false);
 
-        // Send warmup command (first command after connection may get dropped)
-        let _ = rcon.execute("/silent-command").await;
-
         Ok(Self {
             rcon,
             debug_commands,

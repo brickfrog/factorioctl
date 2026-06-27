@@ -447,11 +447,58 @@ rcon.print("ok")
         .to_string()
     }
 
-    /// Start walking character to position
+    /// On_tick step-walk driver for named (orphan) agent characters.
+    ///
+    /// An orphan character (no controlling player) does NOT move from
+    /// `walking_state` alone, since the engine only walks characters driven by a
+    /// player input controller. This injected on_tick handler steps each agent's
+    /// character toward its stored target at running speed (collision-aware,
+    /// sliding on one axis if blocked), giving real over-time traversal rather
+    /// than an instant teleport. Re-registering replaces the prior handler, so it
+    /// is idempotent. (Server-side only: with a connected human client this can
+    /// desync; deterministic MP movement is the bridge-mod follow-up.)
+    fn walk_driver_lua() -> &'static str {
+        r#"
+script.on_event(defines.events.on_tick, function()
+local targets = storage.factorioctl_walk_targets
+if not targets then return end
+for id, tgt in pairs(targets) do
+local c = storage.factorioctl_characters and storage.factorioctl_characters[id]
+if c and c.valid then
+local dx = tgt.x - c.position.x
+local dy = tgt.y - c.position.y
+local dist = math.sqrt(dx * dx + dy * dy)
+local sp = c.character_running_speed or 0.15
+if dist <= sp then
+c.teleport({tgt.x, tgt.y})
+targets[id] = nil
+c.walking_state = {walking = false}
+else
+local nx = c.position.x + (dx / dist) * sp
+local ny = c.position.y + (dy / dist) * sp
+if not c.teleport({nx, ny}) then
+if not c.teleport({nx, c.position.y}) then
+c.teleport({c.position.x, ny})
+end
+end
+end
+else
+targets[id] = nil
+end
+end
+end)
+"#
+    }
+
+    /// Start walking character to position.
+    ///
+    /// Legacy/player ids use `walking_state` (the player controller moves them).
+    /// Named ids store a target and ensure the on_tick step-driver is running.
     pub fn walk_character(agent_id: &AgentId, position: Position) -> String {
         let resolve = Self::resolve_required(agent_id);
-        format!(
-            r#"
+        if agent_id.is_legacy() {
+            format!(
+                r#"
 {}
 local dx = {} - c.position.x
 local dy = {} - c.position.y
@@ -464,10 +511,37 @@ end
 c.walking_state = {{ walking = true, direction = dir }}
 rcon.print("ok")
 "#,
-            resolve, position.x, position.y
-        )
-        .trim()
-        .to_string()
+                resolve, position.x, position.y
+            )
+            .trim()
+            .to_string()
+        } else {
+            format!(
+                r#"
+{}
+storage.factorioctl_walk_targets = storage.factorioctl_walk_targets or {{}}
+storage.factorioctl_walk_targets["{}"] = {{ x = {}, y = {} }}
+local dx = {} - c.position.x
+local dy = {} - c.position.y
+if math.abs(dx) > math.abs(dy) then
+    c.walking_state = {{ walking = true, direction = dx > 0 and defines.direction.east or defines.direction.west }}
+else
+    c.walking_state = {{ walking = true, direction = dy > 0 and defines.direction.south or defines.direction.north }}
+end
+{}
+rcon.print("ok")
+"#,
+                resolve,
+                agent_id.as_str(),
+                position.x,
+                position.y,
+                position.x,
+                position.y,
+                Self::walk_driver_lua(),
+            )
+            .trim()
+            .to_string()
+        }
     }
 
     /// Get character status
