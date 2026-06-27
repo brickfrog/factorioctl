@@ -289,7 +289,7 @@ fn generated_lua_has_rcon_safe_syntax_invariants() {
 }
 
 #[test]
-fn inventory_readers_document_factorio_2_get_contents_shape() {
+fn corrected_inventory_readers_document_factorio_2_get_contents_shape() {
     for case in [
         LuaCase::new("character_inventory", LuaCommand::character_inventory()),
         LuaCase::new("mine_at", LuaCommand::mine_at(pos(16.0, 17.0), 2)),
@@ -305,6 +305,17 @@ fn inventory_readers_document_factorio_2_get_contents_shape() {
     ] {
         assert_uses_factorio_2_get_contents_shape(case.name, &case.lua);
     }
+}
+
+#[test]
+fn get_entity_inventory_remains_a_known_pre_factorio_2_reader_for_cjf_2() {
+    let lua = LuaCommand::get_entity_inventory(42);
+
+    assert!(
+        lua.contains("local contents = inv.get_contents()")
+            && lua.contains("for item, count in pairs(contents) do"),
+        "get_entity_inventory should remain visibly covered as the cjf.2 known-gap until that bead fixes runtime Lua"
+    );
 }
 
 #[test]
