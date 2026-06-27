@@ -2061,7 +2061,7 @@ impl FactorioMcp {
             };
 
             if broadcast_config.console {
-                let escaped = params.message.replace('\\', "\\\\").replace('"', "\\\"");
+                let escaped = factorioctl::client::lua::LuaCommand::lua_escape(&params.message);
                 let lua = format!(r#"game.print("[Agent] {}")"#, escaped);
                 if let Err(e) = client.execute_lua(&lua).await {
                     results.push(format!("Console error: {}", e));
@@ -2071,7 +2071,7 @@ impl FactorioMcp {
             }
 
             if broadcast_config.flying_text {
-                let escaped = params.message.replace('\\', "\\\\").replace('"', "\\\"");
+                let escaped = factorioctl::client::lua::LuaCommand::lua_escape(&params.message);
                 let lua = format!(
                     r#"
 local player = game.players[1]
