@@ -100,12 +100,27 @@ impl RconClient {
         };
 
         // Authenticate
-        let auth_packet = RconPacket::new(client.next_id(), SERVERDATA_AUTH, password);
+        let auth_id = client.next_id();
+        let auth_packet = RconPacket::new(auth_id, SERVERDATA_AUTH, password);
         client.send(&auth_packet).await?;
 
         let response = client.receive().await?;
         if response.request_id == -1 {
             bail!("Authentication failed");
+        }
+        if response.request_id != auth_id {
+            bail!(
+                "Unexpected RCON auth response id: got {}, expected {}",
+                response.request_id,
+                auth_id
+            );
+        }
+        if response.packet_type != SERVERDATA_AUTH_RESPONSE {
+            bail!(
+                "Unexpected RCON auth response type: got {}, expected {}",
+                response.packet_type,
+                SERVERDATA_AUTH_RESPONSE
+            );
         }
 
         Ok(client)
@@ -113,11 +128,25 @@ impl RconClient {
 
     /// Execute a command and return the response
     pub async fn execute(&mut self, command: &str) -> Result<String> {
-        let packet = RconPacket::new(self.next_id(), SERVERDATA_EXECCOMMAND, command);
+        let request_id = self.next_id();
+        let sentinel_id = self.next_id();
+        let packet = RconPacket::new(request_id, SERVERDATA_EXECCOMMAND, command);
         self.send(&packet).await?;
+        let sentinel = RconPacket::new(sentinel_id, SERVERDATA_RESPONSE_VALUE, "");
+        self.send(&sentinel).await?;
 
-        let response = self.receive().await?;
-        Ok(response.body)
+        let mut packets = Vec::new();
+        loop {
+            let response = self.receive().await?;
+            let is_sentinel = response.request_id == sentinel_id;
+            packets.push(response);
+
+            if is_sentinel {
+                break;
+            }
+        }
+
+        reassemble_response_packets(packets, request_id, sentinel_id)
     }
 
     /// Close the connection
@@ -170,6 +199,63 @@ impl RconClient {
     }
 }
 
+fn reassemble_response_packets(
+    packets: impl IntoIterator<Item = RconPacket>,
+    request_id: i32,
+    sentinel_id: i32,
+) -> Result<String> {
+    let mut body = String::new();
+    let mut saw_sentinel = false;
+
+    for packet in packets {
+        if packet.request_id == request_id {
+            if packet.packet_type != SERVERDATA_RESPONSE_VALUE {
+                bail!(
+                    "Unexpected RCON response type for request {}: got {}, expected {}",
+                    request_id,
+                    packet.packet_type,
+                    SERVERDATA_RESPONSE_VALUE
+                );
+            }
+            body.push_str(&packet.body);
+        } else if packet.request_id == sentinel_id {
+            if packet.packet_type != SERVERDATA_RESPONSE_VALUE {
+                bail!(
+                    "Unexpected RCON sentinel response type for request {}: got {}, expected {}",
+                    sentinel_id,
+                    packet.packet_type,
+                    SERVERDATA_RESPONSE_VALUE
+                );
+            }
+            if !packet.body.is_empty() {
+                bail!(
+                    "Unexpected non-empty RCON sentinel response for request {}",
+                    sentinel_id
+                );
+            }
+            saw_sentinel = true;
+            break;
+        } else {
+            bail!(
+                "Unexpected RCON response id: got {}, expected {} or sentinel {}",
+                packet.request_id,
+                request_id,
+                sentinel_id
+            );
+        }
+    }
+
+    if !saw_sentinel {
+        bail!(
+            "Missing RCON sentinel response for request {} after command request {}",
+            sentinel_id,
+            request_id
+        );
+    }
+
+    Ok(body)
+}
+
 impl Drop for RconClient {
     fn drop(&mut self) {
         // Can't do async drop, just drop the stream
@@ -210,5 +296,21 @@ mod tests {
         // Null terminators
         assert_eq!(encoded[14], 0);
         assert_eq!(encoded[15], 0);
+    }
+
+    #[test]
+    fn test_reassembles_fragmented_response_packets() {
+        let packet_buffers = [
+            RconPacket::new(42, SERVERDATA_RESPONSE_VALUE, "{\"entities\":[").encode(),
+            RconPacket::new(42, SERVERDATA_RESPONSE_VALUE, "{\"name\":\"iron-ore\"}").encode(),
+            RconPacket::new(7, SERVERDATA_RESPONSE_VALUE, "").encode(),
+        ];
+        let packets = packet_buffers
+            .iter()
+            .map(|packet| RconPacket::decode(&packet[4..]).unwrap());
+
+        let body = reassemble_response_packets(packets, 42, 7).unwrap();
+
+        assert_eq!(body, "{\"entities\":[{\"name\":\"iron-ore\"}");
     }
 }
