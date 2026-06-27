@@ -29,6 +29,7 @@ logs/
 # === BEGIN choir-tracking (allowlist: ignore server runtime, keep durable artifacts) ===
 /.choir/*
 !/.choir/config.toml
+!/.choir/context/
 !/.choir/state/
 /.choir/state/*
 !/.choir/state/audit-gate.json
