@@ -6,7 +6,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 
 use super::ResolvedConnectionArgs;
-use crate::client::FactorioClient;
+use crate::client::{lua::LuaCommand, FactorioClient};
 use crate::config::{Config, TtsConfig};
 
 #[derive(Args, Debug)]
@@ -59,8 +59,7 @@ pub async fn execute(cmd: SayCommand, conn: &ResolvedConnectionArgs) -> Result<(
 async fn display_console(client: &mut FactorioClient, message: &str) -> Result<()> {
     // Unescape shell-escaped exclamation marks (bash escapes ! as \!)
     let unescaped = message.replace("\\!", "!");
-    // Escape backslashes and quotes for Lua string
-    let escaped = unescaped.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = LuaCommand::lua_escape(&unescaped);
     let lua = format!(r#"game.print("[Agent] {}")"#, escaped);
     client.execute_lua(&lua).await?;
     Ok(())
@@ -69,8 +68,7 @@ async fn display_console(client: &mut FactorioClient, message: &str) -> Result<(
 async fn display_flying_text(client: &mut FactorioClient, message: &str) -> Result<()> {
     // Unescape shell-escaped exclamation marks (bash escapes ! as \!)
     let unescaped = message.replace("\\!", "!");
-    // Escape backslashes and quotes for Lua string
-    let escaped = unescaped.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = LuaCommand::lua_escape(&unescaped);
     let lua = format!(
         r#"
 local player = game.players[1]

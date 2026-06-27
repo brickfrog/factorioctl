@@ -367,9 +367,38 @@ fn corrected_inventory_readers_document_factorio_2_get_contents_shape() {
             "clear_area",
             LuaCommand::clear_area(&legacy_agent(), area(), true, true, false),
         ),
+        LuaCase::new("get_entity_inventory", LuaCommand::get_entity_inventory(42)),
     ] {
         assert_uses_factorio_2_get_contents_shape(case.name, &case.lua);
     }
+}
+
+fn assert_uses_transport_line_contents_shape(case_name: &str, lua: &str) {
+    assert!(
+        lua.contains("for _, item in pairs(line1.get_contents()) do")
+            || lua.contains("for _, item in pairs(line.get_contents()) do"),
+        "{} should iterate LuaTransportLine::get_contents() as a Factorio 2.0 object array",
+        case_name
+    );
+    assert!(
+        lua.contains("item.name") && lua.contains("item.count"),
+        "{} should read item.name and item.count from transport-line contents",
+        case_name
+    );
+    assert!(
+        !lua.contains("for name, count in pairs(line1.get_contents()) do")
+            && !lua.contains("for item_name, item_count in pairs(line.get_contents()) do"),
+        "{} should not use the pre-Factorio-2.0 transport-line contents map shape",
+        case_name
+    );
+}
+
+#[test]
+fn transport_line_readers_document_factorio_2_object_array_shape() {
+    assert_uses_transport_line_contents_shape(
+        "get_belt_lane_contents",
+        &LuaCommand::get_belt_lane_contents(area()),
+    );
 }
 
 #[test]
@@ -416,14 +445,10 @@ fn research_readiness_counts_resolved_character_science_in_totals() {
 }
 
 #[test]
-fn get_entity_inventory_remains_a_known_pre_factorio_2_reader_for_cjf_2() {
+fn get_entity_inventory_uses_factorio_2_object_array_for_cjf_2() {
     let lua = LuaCommand::get_entity_inventory(42);
 
-    assert!(
-        lua.contains("local contents = inv.get_contents()")
-            && lua.contains("for item, count in pairs(contents) do"),
-        "get_entity_inventory should remain visibly covered as the cjf.2 known-gap until that bead fixes runtime Lua"
-    );
+    assert_uses_factorio_2_get_contents_shape("get_entity_inventory", &lua);
 }
 
 #[test]
@@ -830,6 +855,60 @@ fn agent_id_accepts_and_rejects_spec_vectors() {
     assert!(!AgentId::new(Some("doug-nauvis"))
         .expect("named")
         .is_legacy());
+}
+
+#[test]
+fn generated_lua_escapes_hostile_string_arguments_as_single_literals() {
+    let hostile_inputs = [
+        ("a\"b", "a\\\"b"),
+        ("a\\b", "a\\\\b"),
+        ("a\nb", "a\\nb"),
+        ("a\rb", "a\\rb"),
+        ("a]b", "a]b"),
+        (
+            "\\\"); game.print(\"pwned",
+            "\\\\\\\"); game.print(\\\"pwned",
+        ),
+    ];
+
+    for (raw, escaped) in hostile_inputs {
+        for (case_name, lua) in [
+            (
+                "find_entities_name",
+                LuaCommand::find_entities(area(), None, Some(raw)),
+            ),
+            ("craft", LuaCommand::craft(&legacy_agent(), raw, 1)),
+            (
+                "place_entity",
+                LuaCommand::place_entity(&legacy_agent(), raw, pos(1.0, 2.0), Direction::North),
+            ),
+            (
+                "insert_items",
+                LuaCommand::insert_items(45, raw, 1, "chest"),
+            ),
+            ("set_recipe", LuaCommand::set_recipe(47, raw)),
+            ("get_recipe", LuaCommand::get_recipe(raw)),
+            ("save_blueprint", LuaCommand::save_blueprint(raw, area())),
+            (
+                "import_blueprint",
+                LuaCommand::import_blueprint(raw, pos(1.0, 2.0), 0),
+            ),
+            ("start_research", LuaCommand::start_research(raw)),
+        ] {
+            assert!(
+                lua.contains(&format!("\"{}\"", escaped)),
+                "{} should embed {raw:?} as one escaped Lua double-quoted literal:\n{}",
+                case_name,
+                lua
+            );
+            assert_balanced_double_quotes(case_name, &lua);
+            assert!(
+                !lua.contains("game.print(\"pwned"),
+                "{} should not expose hostile Lua as executable code",
+                case_name
+            );
+        }
+    }
 }
 
 #[test]

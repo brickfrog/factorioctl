@@ -60,6 +60,20 @@ impl AgentId {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct LuaErrorResponse {
+    error: Option<String>,
+}
+
+fn ensure_lua_success(response: &str) -> Result<()> {
+    if let Ok(parsed) = serde_json::from_str::<LuaErrorResponse>(response) {
+        if let Some(error) = parsed.error {
+            anyhow::bail!(error);
+        }
+    }
+    Ok(())
+}
+
 impl FactorioClient {
     /// Connect to a Factorio server
     pub async fn connect(host: &str, port: u16, password: &str) -> Result<Self> {
@@ -408,14 +422,16 @@ impl FactorioClient {
     /// Teleport character to position
     pub async fn teleport_character(&mut self, position: Position) -> Result<()> {
         let lua = LuaCommand::teleport_character(&self.agent_id, position);
-        self.execute_lua(&lua).await?;
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
     /// Start walking character to position
     pub async fn walk_character(&mut self, position: Position) -> Result<()> {
         let lua = LuaCommand::walk_character(&self.agent_id, position);
-        self.execute_lua(&lua).await?;
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
@@ -538,6 +554,7 @@ rcon.print('{{"success": true, "mined": ' .. mined .. ', "picked_up": ' .. picke
         // Get initial inventory
         let inv_before = self.character_inventory().await?;
         let count_before: u32 = inv_before.items.iter().map(|i| i.count).sum();
+        let entity_type_lua = LuaCommand::lua_escape(entity_type);
 
         for _ in 0..count {
             // Find nearest entity of type
@@ -572,7 +589,7 @@ else
     rcon.print("none")
 end
 "#,
-                resolve, entity_type
+                resolve, entity_type_lua
             );
 
             let response = self.execute_lua(&find_lua).await?;
@@ -672,14 +689,16 @@ end
     /// Remove entity at position
     pub async fn remove_entity_at(&mut self, position: Position) -> Result<()> {
         let lua = LuaCommand::remove_entity_at(position);
-        self.execute_lua(&lua).await?;
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
     /// Remove entity by unit number
     pub async fn remove_entity(&mut self, unit_number: u32) -> Result<()> {
         let lua = LuaCommand::remove_entity(unit_number);
-        self.execute_lua(&lua).await?;
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
@@ -702,7 +721,8 @@ end
         inventory_type: &str,
     ) -> Result<()> {
         let lua = LuaCommand::insert_items(unit_number, item, count, inventory_type);
-        self.execute_lua(&lua).await?;
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
@@ -738,12 +758,14 @@ end
     /// Set recipe on an assembling machine
     pub async fn set_recipe(&mut self, unit_number: u32, recipe: &str) -> Result<()> {
         let lua = LuaCommand::set_recipe(unit_number, recipe);
-        self.execute_lua(&lua).await?;
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
     /// Check if a technology has been researched
     pub async fn is_tech_researched(&mut self, tech_name: &str) -> Result<bool> {
+        let tech_name = LuaCommand::lua_escape(tech_name);
         let lua = format!(
             r#"local tech = game.forces.player.technologies["{}"]
                rcon.print(tech and tech.researched and "true" or "false")"#,
@@ -1140,6 +1162,7 @@ if c then c.walking_state = {{walking=true, direction=defines.direction.{}}} end
     ) -> Result<GatherResult> {
         let mut total_distance = 0.0;
         let mut gathered = 0u32;
+        let resource_name_lua = LuaCommand::lua_escape(resource_name);
 
         for _ in 0..amount {
             // Find nearest resource
@@ -1172,7 +1195,7 @@ else
     rcon.print("none")
 end
 "#,
-                resolve, resource_name, radius
+                resolve, resource_name_lua, radius
             );
 
             let response = self.execute_lua(&find_lua).await?;
@@ -1272,6 +1295,8 @@ end
     ) -> Result<BuildResult> {
         let dir = Direction::from_name(direction).unwrap_or(Direction::South);
         let near_pos = near.unwrap_or((0.0, 0.0));
+        let drill_type_lua = LuaCommand::lua_escape(drill_type);
+        let resource_lua = LuaCommand::lua_escape(resource);
 
         let resolve = LuaCommand::resolve_required(&self.agent_id);
         let lua = format!(
@@ -1364,8 +1389,8 @@ rcon.print(helpers.table_to_json({{
 "#,
             count = count,
             resolve = resolve,
-            drill_type = drill_type,
-            resource = resource,
+            drill_type = drill_type_lua,
+            resource = resource_lua,
             near_x = near_pos.0,
             near_y = near_pos.1,
             direction = dir.to_factorio()
@@ -1392,6 +1417,7 @@ rcon.print(helpers.table_to_json({{
             "north" | "n" => (0.0, -(spacing as f64)),
             _ => (spacing as f64, 0.0),
         };
+        let furnace_type_lua = LuaCommand::lua_escape(furnace_type);
 
         let resolve = LuaCommand::resolve_required(&self.agent_id);
         let lua = format!(
@@ -1455,7 +1481,7 @@ rcon.print(helpers.table_to_json({{
 "#,
             count = count,
             resolve = resolve,
-            furnace_type = furnace_type,
+            furnace_type = furnace_type_lua,
             start_x = start.0,
             start_y = start.1,
             dx = dx,
@@ -1522,10 +1548,10 @@ for _, belt in pairs(belts) do
         local line = belt.get_transport_line(i)
         local count = line.get_item_count()
         if count > 0 then
-            for item_name, item_count in pairs(line.get_contents()) do
-                table.insert(belt_data.items, {{name = item_name, count = item_count}})
-                item_totals[item_name] = (item_totals[item_name] or 0) + item_count
-                total_items = total_items + item_count
+            for _, item in pairs(line.get_contents()) do
+                table.insert(belt_data.items, {{name = item.name, count = item.count}})
+                item_totals[item.name] = (item_totals[item.name] or 0) + item.count
+                total_items = total_items + item.count
             end
         end
     end
@@ -1655,5 +1681,29 @@ fn entity_collision_padding(entity_name: &str) -> i32 {
 
         // Default to 0 (1x1)
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mutating_lua_response_errors_are_promoted_to_rust_errors() {
+        for response in [
+            r#"{"error":"Entity not found"}"#,
+            r#"{"success":false,"error":"No path"}"#,
+            r#"{"inserted":0,"error":"Inventory full"}"#,
+        ] {
+            let err = ensure_lua_success(response).expect_err("error JSON should be rejected");
+            assert!(err.to_string().contains("error") || !err.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn mutating_lua_success_shapes_stay_accepted() {
+        for response in ["ok", r#"{"inserted": 1}"#, r#"{"success": true}"#] {
+            ensure_lua_success(response).expect("success response should remain accepted");
+        }
     }
 }

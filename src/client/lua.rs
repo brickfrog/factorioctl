@@ -10,6 +10,23 @@ use crate::world::{Area, Direction, Position};
 pub struct LuaCommand;
 
 impl LuaCommand {
+    /// Escape text for safe embedding inside a Lua double-quoted string literal.
+    pub fn lua_escape(s: &str) -> String {
+        let mut escaped = String::with_capacity(s.len());
+        for ch in s.chars() {
+            match ch {
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                c if c.is_control() => escaped.push_str(&format!("\\{:03}", c as u32)),
+                c => escaped.push(c),
+            }
+        }
+        escaped
+    }
+
     pub fn resolve_required(agent_id: &AgentId) -> String {
         if agent_id.is_legacy() {
             r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
@@ -95,10 +112,10 @@ rcon.print(helpers.table_to_json(result))
         )];
 
         if let Some(t) = entity_type {
-            filters.push(format!("type=\"{}\"", t));
+            filters.push(format!("type=\"{}\"", Self::lua_escape(t)));
         }
         if let Some(n) = name {
-            filters.push(format!("name=\"{}\"", n));
+            filters.push(format!("name=\"{}\"", Self::lua_escape(n)));
         }
 
         format!(
@@ -186,10 +203,9 @@ local inv_types = {{
 for _, inv_type in pairs(inv_types) do
     local inv = e.get_inventory(inv_type.define)
     if inv then
-        local contents = inv.get_contents()
         local items = {{}}
-        for item, count in pairs(contents) do
-            table.insert(items, {{ name = item, count = count }})
+        for _, item in pairs(inv.get_contents()) do
+            table.insert(items, {{ name = item.name, count = item.count }})
         end
         if #items > 0 then
             result.inventories[inv_type.name] = items
@@ -208,7 +224,7 @@ rcon.print(helpers.table_to_json(result))
     /// Find resources in an area and aggregate by type
     pub fn find_resources(area: Area, resource_type: Option<&str>) -> String {
         let name_filter = resource_type
-            .map(|t| format!(", name=\"{}\"", t))
+            .map(|t| format!(", name=\"{}\"", Self::lua_escape(t)))
             .unwrap_or_default();
 
         format!(
@@ -329,7 +345,12 @@ else
     rcon.print("null")
 end
 "#,
-            resource_name, from.x, from.y, from.x, from.y, resource_name
+            Self::lua_escape(resource_name),
+            from.x,
+            from.y,
+            from.x,
+            from.y,
+            Self::lua_escape(resource_name)
         )
         .trim()
         .to_string()
@@ -812,6 +833,7 @@ rcon.print(helpers.table_to_json({{
     /// Mine nearest entity of type
     pub fn mine_nearest(agent_id: &AgentId, entity_type: &str, count: u32) -> String {
         let resolve = Self::resolve_required(agent_id);
+        let entity_type = Self::lua_escape(entity_type);
         format!(
             r#"
 {}
@@ -874,6 +896,7 @@ rcon.print(helpers.table_to_json({{
     /// Start crafting a recipe
     pub fn craft(agent_id: &AgentId, recipe: &str, count: u32) -> String {
         let resolve = Self::resolve_required(agent_id);
+        let recipe = Self::lua_escape(recipe);
         format!(
             r#"
 {}
@@ -923,6 +946,7 @@ end"#
     ) -> String {
         let resolve = Self::resolve_required(agent_id);
         let register = Self::register_entity("e");
+        let entity_name = Self::lua_escape(entity_name);
         format!(
             r#"
 {}
@@ -1038,6 +1062,8 @@ end
     ) -> String {
         let resolve = Self::resolve_required(agent_id);
         let register = Self::register_entity("e");
+        let entity_name = Self::lua_escape(entity_name);
+        let belt_type = Self::lua_escape(belt_type);
         format!(
             r#"
 {}
@@ -1114,6 +1140,7 @@ end
     ) -> String {
         let resolve = Self::resolve_required(agent_id);
         let register = Self::register_entity("e");
+        let entity_name = Self::lua_escape(entity_name);
         format!(
             r#"
 {}
@@ -1225,6 +1252,7 @@ end
 
     /// Insert items into an entity
     pub fn insert_items(unit_number: u32, item: &str, count: u32, inventory_type: &str) -> String {
+        let item = Self::lua_escape(item);
         let inv_define = match inventory_type {
             "fuel" => "defines.inventory.fuel",
             "input" => "defines.inventory.assembling_machine_input",
@@ -1269,6 +1297,7 @@ rcon.print(helpers.table_to_json({{ inserted = inserted }}))
         count: u32,
         inventory_type: &str,
     ) -> String {
+        let item = Self::lua_escape(item);
         let inv_define = match inventory_type {
             "fuel" => "defines.inventory.fuel",
             "input" => "defines.inventory.assembling_machine_input",
@@ -1335,6 +1364,7 @@ rcon.print(helpers.table_to_json({{ extracted = inserted, available = available 
     /// Set recipe on an assembling machine
     pub fn set_recipe(unit_number: u32, recipe: &str) -> String {
         let lookup = Self::entity_lookup(unit_number);
+        let recipe = Self::lua_escape(recipe);
         format!(
             r#"
 {}
@@ -1361,6 +1391,7 @@ rcon.print(helpers.table_to_json({{ success = result ~= nil }}))
 
     /// Get a recipe by name
     pub fn get_recipe(name: &str) -> String {
+        let name = Self::lua_escape(name);
         format!(
             r#"
 local recipe = prototypes.recipe["{}"]
@@ -1401,6 +1432,7 @@ end
 
     /// Get all recipes in a category
     pub fn get_recipes_by_category(category: &str) -> String {
+        let category = Self::lua_escape(category);
         format!(
             r#"
 local recipes = {{}}
@@ -1423,6 +1455,7 @@ rcon.print(helpers.table_to_json(recipes))
 
     /// Get all recipes that produce a specific item
     pub fn get_recipes_for_item(item: &str) -> String {
+        let item = Self::lua_escape(item);
         format!(
             r#"
 local recipes = {{}}
@@ -1467,6 +1500,7 @@ rcon.print(helpers.table_to_json(recipes))
 
     /// Get an entity prototype by name
     pub fn get_prototype(name: &str) -> String {
+        let name = Self::lua_escape(name);
         format!(
             r#"
 local proto = prototypes.entity["{}"]
@@ -1616,6 +1650,7 @@ end
 
     /// Save a blueprint to storage with a name
     pub fn save_blueprint(name: &str, area: Area) -> String {
+        let name = Self::lua_escape(name);
         format!(
             r#"
 local surface = game.surfaces[1]
@@ -1683,6 +1718,7 @@ rcon.print(helpers.table_to_json(result))
 
     /// Get a saved blueprint string by name
     pub fn get_blueprint(name: &str) -> String {
+        let name = Self::lua_escape(name);
         format!(
             r#"
 storage.blueprints = storage.blueprints or {{}}
@@ -1704,6 +1740,7 @@ end
 
     /// Place a saved blueprint at a position
     pub fn place_blueprint(name: &str, position: Position, direction: u8) -> String {
+        let name = Self::lua_escape(name);
         format!(
             r#"
 storage.blueprints = storage.blueprints or {{}}
@@ -1759,6 +1796,7 @@ rcon.print(helpers.table_to_json({{
 
     /// Import and place a blueprint from a string
     pub fn import_blueprint(bp_string: &str, position: Position, direction: u8) -> String {
+        let bp_string = Self::lua_escape(bp_string);
         format!(
             r#"
 local player = game.get_player(1)
@@ -1814,6 +1852,7 @@ rcon.print(helpers.table_to_json({{
 
     /// Delete a saved blueprint
     pub fn delete_blueprint(name: &str) -> String {
+        let name = Self::lua_escape(name);
         format!(
             r#"
 storage.blueprints = storage.blueprints or {{}}
@@ -2132,6 +2171,7 @@ rcon.print(helpers.table_to_json(result))
 
     /// Start researching a technology (queues it properly)
     pub fn start_research(tech_name: &str) -> String {
+        let tech_name = Self::lua_escape(tech_name);
         format!(
             r#"
 local force = game.forces.player
@@ -2810,17 +2850,17 @@ for _, belt in pairs(belts) do
 
     local line1 = belt.get_transport_line(1)
     if line1 then
-        for name, count in pairs(line1.get_contents()) do
-            table.insert(left_items, {{name=name, count=count}})
-            left_count = left_count + count
+        for _, item in pairs(line1.get_contents()) do
+            table.insert(left_items, {{name=item.name, count=item.count}})
+            left_count = left_count + item.count
         end
     end
 
     local line2 = belt.get_transport_line(2)
     if line2 then
-        for name, count in pairs(line2.get_contents()) do
-            table.insert(right_items, {{name=name, count=count}})
-            right_count = right_count + count
+        for _, item in pairs(line2.get_contents()) do
+            table.insert(right_items, {{name=item.name, count=item.count}})
+            right_count = right_count + item.count
         end
     end
 
