@@ -861,6 +861,7 @@ fn agent_id_accepts_and_rejects_spec_vectors() {
 fn generated_lua_escapes_hostile_string_arguments_as_single_literals() {
     let hostile_inputs = [
         ("a\"b", "a\\\"b"),
+        ("a'b", "a\\'b"),
         ("a\\b", "a\\\\b"),
         ("a\nb", "a\\nb"),
         ("a\rb", "a\\rb"),
@@ -909,6 +910,16 @@ fn generated_lua_escapes_hostile_string_arguments_as_single_literals() {
             );
         }
     }
+}
+
+#[test]
+fn lua_escape_is_safe_in_single_quoted_literals() {
+    // build_drill_array embeds escaped resource names inside SINGLE-quoted Lua
+    // literals (rcon.print('...No <resource> found...')). The escaper must
+    // neutralize single quotes too, or a name like "iron'ore" breaks out.
+    assert_eq!(LuaCommand::lua_escape("iron'ore"), "iron\\'ore");
+    // Both quote styles are escaped, so the value is safe in either context.
+    assert_eq!(LuaCommand::lua_escape("a\"b'c"), "a\\\"b\\'c");
 }
 
 #[test]

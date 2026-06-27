@@ -10,13 +10,18 @@ use crate::world::{Area, Direction, Position};
 pub struct LuaCommand;
 
 impl LuaCommand {
-    /// Escape text for safe embedding inside a Lua double-quoted string literal.
+    /// Escape text for safe embedding inside a Lua string literal.
+    ///
+    /// Escapes both quote styles so the result is safe in either a double- or
+    /// single-quoted Lua literal (`"..."` or `'...'`). `\'` and `\"` are valid
+    /// escapes regardless of the surrounding quote, so over-escaping is harmless.
     pub fn lua_escape(s: &str) -> String {
         let mut escaped = String::with_capacity(s.len());
         for ch in s.chars() {
             match ch {
                 '\\' => escaped.push_str("\\\\"),
                 '"' => escaped.push_str("\\\""),
+                '\'' => escaped.push_str("\\'"),
                 '\n' => escaped.push_str("\\n"),
                 '\r' => escaped.push_str("\\r"),
                 '\t' => escaped.push_str("\\t"),
@@ -459,8 +464,11 @@ end
         format!(
             r#"
 {}
-c.teleport({{ {}, {} }})
-rcon.print("ok")
+if c.teleport({{ {}, {} }}) then
+    rcon.print("ok")
+else
+    rcon.print('{{"error": "Teleport blocked (target obstructed)"}}')
+end
 "#,
             resolve, position.x, position.y
         )
@@ -1281,6 +1289,10 @@ if not inv then
 end
 
 local inserted = inv.insert{{ name = "{}", count = {} }}
+if inserted == 0 then
+    rcon.print('{{"error": "Inserted 0 items (inventory full or item not accepted)"}}')
+    return
+end
 rcon.print(helpers.table_to_json({{ inserted = inserted }}))
 "#,
             lookup, inv_define, item, count
@@ -1379,7 +1391,11 @@ if not e.set_recipe then
 end
 
 local result = e.set_recipe("{}")
-rcon.print(helpers.table_to_json({{ success = result ~= nil }}))
+if result == nil then
+    rcon.print('{{"error": "Could not set recipe (unknown or incompatible recipe)"}}')
+    return
+end
+rcon.print(helpers.table_to_json({{ success = true }}))
 "#,
             lookup, recipe
         )
