@@ -16,7 +16,7 @@ use factorioctl::analyze::{
     analyze_belt_reach, analyze_inserters, detect_sushi_belts, find_belt_gaps, find_belt_networks,
     trace_belt_sources, BeltGraph,
 };
-use factorioctl::client::{AgentId, FactorioClient};
+use factorioctl::client::{lua::LuaCommand, AgentId, FactorioClient};
 use factorioctl::memory::{AgentMemory, BeltRouting, ProtectedResource, Zone, ZoneType};
 use factorioctl::world::{
     find_belt_route_with_options, Area, BeltKind, Direction, GridPos, Position, RoutingOptions,
@@ -29,6 +29,38 @@ struct ConnectionConfig {
     host: String,
     port: u16,
     password: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drill_drop_position_lua;
+
+    #[test]
+    fn drill_drop_position_lua_uses_registry_lookup_and_no_trailing_comment() {
+        let lua = drill_drop_position_lua(42);
+
+        assert!(
+            lua.contains("storage.factorioctl_entities[42]"),
+            "drill drop-position Lua should use the registry-first entity lookup"
+        );
+        assert!(
+            !lua.contains("game.get_entity_by_unit_number"),
+            "Lua-created entities are not found reliably by game.get_entity_by_unit_number"
+        );
+
+        for line in lua.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("--") {
+                continue;
+            }
+            if let Some(comment_idx) = line.find("--") {
+                assert!(
+                    line[..comment_idx].trim().is_empty(),
+                    "same-line trailing Lua comment will swallow later joined statements: {line}"
+                );
+            }
+        }
+    }
 }
 
 impl ConnectionConfig {
@@ -197,6 +229,32 @@ pub struct InsertItemsParams {
 
 fn default_inventory_type() -> String {
     "chest".to_string()
+}
+
+fn drill_drop_position_lua(unit_number: u32) -> String {
+    let lookup = LuaCommand::entity_lookup(unit_number);
+    format!(
+        r#"
+{}
+if e and e.valid and e.drop_position then
+    local dp = e.drop_position
+    local dir = e.direction
+    -- Calculate belt direction based on drill facing
+    -- Drill faces a direction, belt should run perpendicular or away
+    -- Belt runs in same direction as drill faces
+    local belt_dir = dir
+    rcon.print(game.table_to_json({{
+        drop_x = dp.x,
+        drop_y = dp.y,
+        drill_direction = dir,
+        belt_direction = belt_dir
+    }}))
+else
+    rcon.print(game.table_to_json({{error = "Entity not found or has no drop_position"}}))
+end
+"#,
+        lookup
+    )
 }
 
 /// Parameters for extract_items tool
@@ -720,27 +778,7 @@ impl FactorioMcp {
 
         if is_drill {
             // For drills, query the actual drop_position from Factorio
-            let lua = format!(
-                r#"
-                local e = game.get_entity_by_unit_number({})
-                if e and e.valid and e.drop_position then
-                    local dp = e.drop_position
-                    local dir = e.direction
-                    -- Calculate belt direction based on drill facing
-                    -- Drill faces a direction, belt should run perpendicular or away
-                    local belt_dir = dir  -- Belt runs in same direction as drill faces
-                    rcon.print(game.table_to_json({{
-                        drop_x = dp.x,
-                        drop_y = dp.y,
-                        drill_direction = dir,
-                        belt_direction = belt_dir
-                    }}))
-                else
-                    rcon.print(game.table_to_json({{error = "Entity not found or has no drop_position"}}))
-                end
-                "#,
-                params.unit_number
-            );
+            let lua = drill_drop_position_lua(params.unit_number);
 
             let drop_result = match client.execute_lua(&lua).await {
                 Ok(r) => r,
