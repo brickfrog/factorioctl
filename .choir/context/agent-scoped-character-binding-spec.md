@@ -19,9 +19,10 @@ only RCON state (`mod.rs:25-30`) and ignores the `FACTORIO_AGENT_ID` the bridge 
 **Q: Who owns the agent's character?** A: factorioctl, in `storage.factorioctl_characters[agent_id]`,
 keyed by `FACTORIO_AGENT_ID`. Standalone; bridge/mod reconciliation is a follow-up.
 
-**Q: The old connected-human fallback?** A: Flag-gated by resolution mode (killing it outright breaks
-the working bridge): *legacy* ids resolve the connected player (back-compat); *named* ids are strict and
-never touch a human.
+**Q: The old connected-human fallback?** A: Gated by resolution mode — legacy-vs-named id semantics,
+not a separate flag (killing it outright breaks the working bridge): *legacy* ids (`default`/`__player__`,
+a reserved namespace) resolve the connected player (back-compat); *named* ids are strict and never touch
+a human. (Note: an agent literally named `default` therefore cannot get strict mode — reserved by design.)
 
 **Q: No character yet?** A: Explicit `init_character`, else structured error. No implicit creation.
 Named agents require a spawn position (no `(0,0)` pile); legacy default may use `(0,0)`.
@@ -91,10 +92,14 @@ if not (c and c.valid) then rcon.print('{"error":"no character for agent __playe
 `resolve_optional` = the same two blocks **minus** the final `if not (c and c.valid) then ... return end`
 line. The caller then branches on `c and c.valid` and emits its own existing shape.
 
-Per-tool mapping:
-- **resolve_required**: `walk_character`, `teleport_character`, `mine_at`, `mine_nearest`, `start_mining`, `craft`, `place_entity`, `place_underground_belt`, `place_ghost`, `extract_items`, `clear_area`, `init`-adjacent placement.
-- **resolve_optional** (keep existing graceful shape): `character_status`→`{"valid":false}`, `character_inventory`→empty inv, `get_mining_status`→`{"mining":false}`, `wait_for_crafting`→`"0"`, `stop_mining`→`"error"`, `get_available_research` (skips inventory science when `c` absent).
-No tool changes its **success** shape.
+Per-tool mapping — EXHAUSTIVE over the site inventory below (every site is assigned; no folklore):
+- **resolve_required** (action tools; early-return structured error on absence):
+  - `lua.rs` builders: `walk_character`, `teleport_character`, `mine_at`, `mine_nearest`, `start_mining`, `craft`, `place_entity`, `place_underground_belt`, `place_ghost`, `extract_items` (for the destination char; source entity via registry), `clear_area`.
+  - `mod.rs` inline snippets: all `walk_to` stop/start/timeout snippets (`933-934`, `1015-1022`, `1027-1030`); all `gather_resource` find/mine/final-inventory snippets (`1052-1057`, `1106-1114`, `1140-1144`); both builders `build_drill_array` (`1189-1196`) and `build_smelter_line` (`1310-1317`).
+- **resolve_optional** (keep existing graceful shape; caller branches on `c and c.valid`):
+  - `lua.rs`: `character_status`→`{"valid":false}`, `character_inventory`→empty inv, `get_mining_status`→`{"mining":false}`, `wait_for_crafting`→`"0"`, `stop_mining`→`"error"`, `get_available_research` (skips inventory science when `c` absent).
+  - `mod.rs`: `get_character_position` (`811-830`) → existing absence shape.
+No tool changes its **success** shape. Any future character-using site MUST be added to exactly one bucket.
 
 ### Complete site inventory (closes B5/F3/F4/F11)
 - `lua.rs` lookups to replace: 379,401,431,457,489,548,567,589,690,757,791,810,925,997,1912-1919(research),2760.
