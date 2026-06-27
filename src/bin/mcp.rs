@@ -33,7 +33,7 @@ struct ConnectionConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::drill_drop_position_lua;
+    use super::{drill_drop_position_lua, raw_lua_enabled};
 
     #[test]
     fn drill_drop_position_lua_uses_registry_lookup_and_no_trailing_comment() {
@@ -59,6 +59,27 @@ mod tests {
                     "same-line trailing Lua comment will swallow later joined statements: {line}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn raw_lua_enabled_only_accepts_explicit_truthy_values() {
+        let cases = [
+            (None, false),
+            (Some(""), false),
+            (Some("0"), false),
+            (Some("false"), false),
+            (Some("1"), true),
+            (Some("true"), true),
+            (Some("TRUE"), true),
+            (Some("yes"), true),
+            (Some("on"), true),
+            (Some(" 1 "), true),
+            (Some("banana"), false),
+        ];
+
+        for (env_value, expected) in cases {
+            assert_eq!(raw_lua_enabled(env_value), expected, "{env_value:?}");
         }
     }
 }
@@ -254,6 +275,13 @@ else
 end
 "#,
         lookup
+    )
+}
+
+fn raw_lua_enabled(env_value: Option<&str>) -> bool {
+    matches!(
+        env_value.map(|value| value.trim().to_ascii_lowercase()),
+        Some(value) if matches!(value.as_str(), "1" | "true" | "yes" | "on")
     )
 }
 
@@ -2060,8 +2088,20 @@ impl FactorioMcp {
     }
 
     /// Execute raw Lua command.
-    #[tool(description = "Execute a raw Lua command. Use with caution - for advanced operations.")]
+    #[tool(
+        description = "Execute a raw Lua command. Disabled by default because raw Lua is arbitrary code execution; requires FACTORIOCTL_ALLOW_RAW_LUA=1 for trusted operator use."
+    )]
     async fn execute_lua(&self, Parameters(params): Parameters<ExecuteLuaParams>) -> String {
+        let allow_raw_lua = std::env::var("FACTORIOCTL_ALLOW_RAW_LUA").ok();
+        if !raw_lua_enabled(allow_raw_lua.as_deref()) {
+            return self
+                .with_player_messages(
+                    "Error: execute_lua is disabled. Raw Lua execution is an arbitrary-code-execution surface and is off by default. Set FACTORIOCTL_ALLOW_RAW_LUA=1 to enable it for trusted operator use."
+                        .to_string(),
+                )
+                .await;
+        }
+
         let mut client = match self.connect().await {
             Ok(c) => c,
             Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
