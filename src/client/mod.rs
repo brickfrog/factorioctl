@@ -990,6 +990,7 @@ end
         if !self.agent_id.is_legacy() {
             let target_lua = LuaCommand::set_walk_target(&self.agent_id, target);
             let clear_lua = LuaCommand::clear_walk_target(&self.agent_id);
+            let active_lua = LuaCommand::walk_target_active(&self.agent_id);
             self.execute_lua(&target_lua).await?;
             let mut last_pos = start_pos;
 
@@ -1004,6 +1005,16 @@ end
                         final_position: pos,
                         distance_walked: total_distance,
                         reason: None,
+                    });
+                }
+
+                let target_active = self.execute_lua(&active_lua).await?;
+                if target_active.trim() != "true" {
+                    return Ok(WalkResult {
+                        arrived: pos.distance(&target) < 3.0,
+                        final_position: pos,
+                        distance_walked: total_distance,
+                        reason: Some("Walk target cleared".to_string()),
                     });
                 }
 

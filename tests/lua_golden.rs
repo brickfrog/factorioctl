@@ -452,6 +452,55 @@ fn get_entity_inventory_uses_factorio_2_object_array_for_cjf_2() {
 }
 
 #[test]
+fn blueprint_commands_use_scratch_stack_without_name_only_restore() {
+    for case in [
+        LuaCase::new(
+            "create_native_blueprint",
+            LuaCommand::create_native_blueprint(area()),
+        ),
+        LuaCase::new(
+            "save_blueprint",
+            LuaCommand::save_blueprint("starter", area()),
+        ),
+        LuaCase::new(
+            "place_blueprint",
+            LuaCommand::place_blueprint("starter", pos(26.0, 27.0), 4),
+        ),
+        LuaCase::new(
+            "import_blueprint",
+            LuaCommand::import_blueprint("0eNq-test", pos(28.0, 29.0), 8),
+        ),
+    ] {
+        assert!(
+            case.lua.contains("find_empty_stack") && case.lua.contains("game.create_inventory"),
+            "{} should prefer an empty player stack and fall back to a temporary scratch inventory",
+            case.name
+        );
+        assert!(
+            !case.lua.contains("local slot = inv[1]") && !case.lua.contains("saved_item"),
+            "{} should not overwrite slot 1 or restore an item by name only",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn named_walk_poll_loop_exits_when_driver_clears_target() {
+    let client_mod = include_str!("../src/client/mod.rs");
+    let lua_rs = include_str!("../src/client/lua.rs");
+
+    assert!(
+        client_mod.contains("walk_target_active") && client_mod.contains("Walk target cleared"),
+        "named walk_to should poll the shared driver target and exit when it has been cleared"
+    );
+    assert!(
+        lua_rs.contains("storage.factorioctl_walk_targets")
+            && lua_rs.contains("pub fn walk_target_active"),
+        "walk_target_active should query the shared driver target table"
+    );
+}
+
+#[test]
 fn inventory_and_crafting_lua_snapshots_are_stable() {
     LuaCase::new("character_inventory", LuaCommand::character_inventory(&legacy_agent())).assert_snapshot(
         r#"storage.factorioctl_characters = storage.factorioctl_characters or {}

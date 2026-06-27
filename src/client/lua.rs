@@ -67,7 +67,7 @@ local c = storage.factorioctl_characters["{}"]"#,
         }
     }
 
-    fn entity_lookup(unit_number: u32) -> String {
+    pub fn entity_lookup(unit_number: u32) -> String {
         format!(
             r#"storage.factorioctl_entities = storage.factorioctl_entities or {{}}
 local e = storage.factorioctl_entities[{}]
@@ -89,6 +89,20 @@ end"#,
             "storage.factorioctl_entities = storage.factorioctl_entities or {{}}\nstorage.factorioctl_entities[{0}.unit_number] = {0}",
             var_name
         )
+    }
+
+    fn blueprint_scratch_stack_lua() -> &'static str {
+        r#"local scratch_temp_inventory = nil
+local slot = inv.find_empty_stack("blueprint")
+if not slot then
+    scratch_temp_inventory = game.create_inventory(1)
+    slot = scratch_temp_inventory[1]
+end
+slot.set_stack{name = "blueprint"}
+local function cleanup_scratch()
+    if slot then slot.clear() end
+    if scratch_temp_inventory then scratch_temp_inventory.destroy() end
+end"#
     }
 
     /// Get list of surfaces
@@ -559,6 +573,18 @@ storage.factorioctl_walk_targets["{}"] = {{ x = {}, y = {}, stuck_ticks = 0, exp
             r#"
 storage.factorioctl_walk_targets = storage.factorioctl_walk_targets or {{}}
 storage.factorioctl_walk_targets["{}"] = nil
+"#,
+            agent_id.as_str()
+        )
+        .trim()
+        .to_string()
+    }
+
+    pub fn walk_target_active(agent_id: &AgentId) -> String {
+        format!(
+            r#"
+storage.factorioctl_walk_targets = storage.factorioctl_walk_targets or {{}}
+rcon.print(storage.factorioctl_walk_targets["{}"] ~= nil and "true" or "false")
 "#,
             agent_id.as_str()
         )
@@ -1631,9 +1657,7 @@ if not inv then
     return
 end
 
-local slot = inv[1]
-local saved_item = slot.valid_for_read and slot.name or nil
-slot.set_stack{{name = "blueprint"}}
+{}
 
 local entities = slot.create_blueprint{{
     surface = surface,
@@ -1645,20 +1669,22 @@ local entities = slot.create_blueprint{{
 local count = #entities
 
 if count == 0 then
-    slot.clear()
-    if saved_item then slot.set_stack{{name = saved_item}} end
+    cleanup_scratch()
     rcon.print('{{"error": "No entities in area"}}')
 else
     local bp_string = slot.export_stack()
-    slot.clear()
-    if saved_item then slot.set_stack{{name = saved_item}} end
+    cleanup_scratch()
     rcon.print(helpers.table_to_json({{
         blueprint_string = bp_string,
         entity_count = count
     }}))
 end
 "#,
-            area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y
+            Self::blueprint_scratch_stack_lua(),
+            area.left_top.x,
+            area.left_top.y,
+            area.right_bottom.x,
+            area.right_bottom.y
         )
         .trim()
         .to_string()
@@ -1682,9 +1708,7 @@ if not inv then
     return
 end
 
-local slot = inv[1]
-local saved_item = slot.valid_for_read and slot.name or nil
-slot.set_stack{{name = "blueprint"}}
+{}
 
 local entities = slot.create_blueprint{{
     surface = surface,
@@ -1695,8 +1719,7 @@ local entities = slot.create_blueprint{{
 local count = #entities
 
 if count == 0 then
-    slot.clear()
-    if saved_item then slot.set_stack{{name = saved_item}} end
+    cleanup_scratch()
     rcon.print('{{"success": false, "error": "No entities in area"}}')
 else
     storage.blueprints = storage.blueprints or {{}}
@@ -1704,12 +1727,16 @@ else
         string = slot.export_stack(),
         entity_count = count
     }}
-    slot.clear()
-    if saved_item then slot.set_stack{{name = saved_item}} end
+    cleanup_scratch()
     rcon.print('{{"success": true, "entity_count": ' .. count .. '}}')
 end
 "#,
-            area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y, name
+            Self::blueprint_scratch_stack_lua(),
+            area.left_top.x,
+            area.left_top.y,
+            area.right_bottom.x,
+            area.right_bottom.y,
+            name
         )
         .trim()
         .to_string()
@@ -1778,9 +1805,7 @@ if not inv then
     return
 end
 
-local slot = inv[1]
-local saved_item = slot.valid_for_read and slot.name or nil
-slot.set_stack{{name = "blueprint"}}
+{}
 slot.import_stack(data.string)
 
 local ghosts = slot.build_blueprint{{
@@ -1796,15 +1821,18 @@ for _, ghost in pairs(ghosts) do
     if ghost.unit_number then storage.factorioctl_entities[ghost.unit_number] = ghost end
 end
 
-slot.clear()
-if saved_item then slot.set_stack{{name = saved_item}} end
+cleanup_scratch()
 
 rcon.print(helpers.table_to_json({{
     success = true,
     ghosts_created = #ghosts
 }}))
 "#,
-            name, position.x, position.y, direction
+            name,
+            Self::blueprint_scratch_stack_lua(),
+            position.x,
+            position.y,
+            direction
         )
         .trim()
         .to_string()
@@ -1827,14 +1855,11 @@ if not inv then
     return
 end
 
-local slot = inv[1]
-local saved_item = slot.valid_for_read and slot.name or nil
-slot.set_stack{{name = "blueprint"}}
+{}
 
 local ok = slot.import_stack("{}")
 if not ok then
-    slot.clear()
-    if saved_item then slot.set_stack{{name = saved_item}} end
+    cleanup_scratch()
     rcon.print('{{"success": false, "error": "Invalid blueprint string"}}')
     return
 end
@@ -1852,15 +1877,18 @@ for _, ghost in pairs(ghosts) do
     if ghost.unit_number then storage.factorioctl_entities[ghost.unit_number] = ghost end
 end
 
-slot.clear()
-if saved_item then slot.set_stack{{name = saved_item}} end
+cleanup_scratch()
 
 rcon.print(helpers.table_to_json({{
     success = true,
     ghosts_created = #ghosts
 }}))
 "#,
-            bp_string, position.x, position.y, direction
+            Self::blueprint_scratch_stack_lua(),
+            bp_string,
+            position.x,
+            position.y,
+            direction
         )
         .trim()
         .to_string()
