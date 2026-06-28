@@ -24,6 +24,10 @@ local function init_storage()
     storage.entity_queue = storage.entity_queue or {}
     -- Map markers for agent characters (chart tag references)
     storage.agent_tags = storage.agent_tags or {}
+    -- In-game chat captured for the bridge. Registered in the MOD (not the
+    -- level script) so every peer has an identical handler set and clients can
+    -- join — runtime-injected level-script handlers break MP ("not multiplayer safe").
+    storage.chat_messages = storage.chat_messages or {}
 end
 
 -- Ensure per-agent message tables exist for a player
@@ -744,6 +748,13 @@ remote.add_interface("claude_interface", {
         return storage.walk_targets ~= nil and storage.walk_targets[agent_id] ~= nil
     end,
 
+    -- Return and clear captured chat messages as a JSON string (bridge polls this)
+    get_chat_messages = function()
+        local msgs = storage.chat_messages or {}
+        storage.chat_messages = {}
+        return helpers.table_to_json(msgs)
+    end,
+
     -- Get character entity (safe from any context, uses synced mod storage)
     get_character = function(agent_id)
         if not storage.characters then return nil end
@@ -876,6 +887,25 @@ script.on_event(defines.events.on_player_joined_game, function(event)
         if player and player.controller_type ~= defines.controllers.spectator then
             player.set_controller{type = defines.controllers.spectator}
         end
+    end
+end)
+
+-- Capture in-game chat for the bridge (registered in the mod -> MP-safe)
+script.on_event(defines.events.on_console_chat, function(event)
+    if not event.message then return end
+    storage.chat_messages = storage.chat_messages or {}
+    local player_name = "console"
+    if event.player_index then
+        local p = game.get_player(event.player_index)
+        if p then player_name = p.name end
+    end
+    table.insert(storage.chat_messages, {
+        player = player_name,
+        message = event.message,
+        tick = event.tick,
+    })
+    while #storage.chat_messages > MAX_MESSAGES do
+        table.remove(storage.chat_messages, 1)
     end
 end)
 

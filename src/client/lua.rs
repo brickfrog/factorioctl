@@ -1974,39 +1974,36 @@ end
         .to_string()
     }
 
-    /// Register chat message handler (captures player chat for LLM agent)
+    /// No-op. Chat capture is registered by the claude-interface MOD's
+    /// on_console_chat handler (control.lua), NOT by injecting a handler into
+    /// the level script over RCON. A runtime-registered level-script event
+    /// handler is absent on a joining client, so the save becomes "not
+    /// multiplayer safe" and clients cannot connect. Kept as a harmless no-op
+    /// for callers that still invoke it.
     pub fn register_chat_handler() -> String {
         r#"
-if not storage.factorioctl_chat then
-    storage.factorioctl_chat = { messages = {} }
-end
-script.on_event(defines.events.on_console_chat, function(event)
-    local player_name = "console"
-    if event.player_index then
-        local p = game.get_player(event.player_index)
-        if p then player_name = p.name end
-    end
-    table.insert(storage.factorioctl_chat.messages, {
-        player = player_name,
-        message = event.message,
-        tick = event.tick
-    })
-end)
 rcon.print("registered")
 "#
         .trim()
         .to_string()
     }
 
-    /// Get and clear pending chat messages
+    /// Get and clear pending chat messages. Reads from the mod's chat buffer via
+    /// the remote interface (MP-safe); falls back to the level-script buffer only
+    /// when the mod is absent (single-player / no mod), where chat is unsupported
+    /// anyway since nothing populates it.
     pub fn get_and_clear_chat_messages() -> String {
         r#"
-if not storage.factorioctl_chat then
-    storage.factorioctl_chat = { messages = {} }
+if remote.interfaces["claude_interface"] and remote.interfaces["claude_interface"]["get_chat_messages"] then
+    rcon.print(remote.call("claude_interface", "get_chat_messages"))
+else
+    if not storage.factorioctl_chat then
+        storage.factorioctl_chat = { messages = {} }
+    end
+    local msgs = storage.factorioctl_chat.messages
+    storage.factorioctl_chat.messages = {}
+    rcon.print(helpers.table_to_json(msgs))
 end
-local msgs = storage.factorioctl_chat.messages
-storage.factorioctl_chat.messages = {}
-rcon.print(helpers.table_to_json(msgs))
 "#
         .trim()
         .to_string()
@@ -3105,13 +3102,20 @@ mod tests {
     use super::LuaCommand;
 
     #[test]
-    fn register_chat_handler_is_unconditional_and_preserves_buffer() {
+    fn register_chat_handler_injects_no_level_script_event_handler() {
+        // MP-safety: chat capture lives in the mod (control.lua on_console_chat),
+        // NOT a runtime-injected level-script handler. register_chat_handler must
+        // never emit script.on_event, or joining clients are refused with
+        // "mod event handlers are not identical ... level".
         let lua = LuaCommand::register_chat_handler();
+        assert!(!lua.contains("script.on_event"));
+        assert!(!lua.contains("on_console_chat"));
+    }
 
-        assert!(lua.contains("script.on_event(defines.events.on_console_chat"));
-        assert!(!lua.contains("handler_registered"));
-        assert!(lua.contains("storage.factorioctl_chat"));
-        assert!(lua.contains("messages = {}"));
+    #[test]
+    fn get_and_clear_chat_messages_reads_via_mod_remote() {
+        let lua = LuaCommand::get_and_clear_chat_messages();
+        assert!(lua.contains(r#"remote.call("claude_interface", "get_chat_messages")"#));
         for line in lua.lines() {
             if let Some(idx) = line.find("--") {
                 assert!(
