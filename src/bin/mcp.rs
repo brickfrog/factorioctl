@@ -19,8 +19,8 @@ use factorioctl::analyze::{
 use factorioctl::client::{lua::LuaCommand, AgentId, FactorioClient};
 use factorioctl::memory::{AgentMemory, BeltRouting, ProtectedResource, Zone, ZoneType};
 use factorioctl::world::{
-    build_situation_report, find_belt_route_with_options, Area, BeltKind, Direction, GridPos,
-    Position, RoutingOptions, TilePos, UndergroundConfig,
+    build_production_report, build_situation_report, find_belt_route_with_options, Area, BeltKind,
+    Direction, GridPos, Position, RoutingOptions, TilePos, UndergroundConfig,
 };
 
 /// Connection configuration loaded from environment or config
@@ -173,6 +173,17 @@ pub struct GetResourcesParams {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SituationReportParams {
     /// Radius around the character to scan
+    pub radius: Option<u32>,
+}
+
+/// Parameters for verify_production tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct VerifyProductionParams {
+    /// X coordinate of area center (default: character position)
+    pub x: Option<f64>,
+    /// Y coordinate of area center (default: character position)
+    pub y: Option<f64>,
+    /// Radius around the center to scan
     pub radius: Option<u32>,
 }
 
@@ -1363,6 +1374,56 @@ impl FactorioMcp {
             resources,
             radius,
         );
+        let result =
+            serde_json::to_string_pretty(&report).unwrap_or_else(|e| format!("Error: {}", e));
+        self.with_player_messages(result).await
+    }
+
+    /// Verify producing entities are actually working after building.
+    #[tool(
+        description = "Call this after building or modifying production to confirm the intended outcome. Reports each producing entity's status (working/no_power/no_fuel/no_ingredients/full_output/etc.) plus products_finished so you can diagnose failures and derive rates by calling twice."
+    )]
+    async fn verify_production(
+        &self,
+        Parameters(params): Parameters<VerifyProductionParams>,
+    ) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let radius = params.radius.unwrap_or(32);
+        let position = match (params.x, params.y) {
+            (Some(x), Some(y)) => Position::new(x, y),
+            (None, None) => {
+                let status = match client.character_status().await {
+                    Ok(status) => status,
+                    Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+                };
+                match status.position {
+                    Some(position) => position,
+                    None => match client.get_character_position().await {
+                        Ok(position) => position,
+                        Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+                    },
+                }
+            }
+            _ => {
+                return self
+                    .with_player_messages("Error: x and y must be provided together".to_string())
+                    .await;
+            }
+        };
+        let r = radius as f64;
+        let area = Area {
+            left_top: Position::new(position.x - r, position.y - r),
+            right_bottom: Position::new(position.x + r, position.y + r),
+        };
+        let entities = match client.verify_production(area).await {
+            Ok(entities) => entities,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+        let report = build_production_report(entities);
         let result =
             serde_json::to_string_pretty(&report).unwrap_or_else(|e| format!("Error: {}", e));
         self.with_player_messages(result).await

@@ -22,6 +22,7 @@ pub mod mine;
 pub mod parsing;
 pub mod place;
 pub mod power;
+pub mod production;
 pub mod remove;
 pub mod research;
 pub mod route;
@@ -149,6 +150,9 @@ pub enum Commands {
 
     /// Compact situational snapshot for orientation
     Situation(situation::SituationCommand),
+
+    /// Verify producing entities are working and diagnose why not
+    Production(production::ProductionCommand),
 
     /// Walk to a position (smooth navigation)
     WalkTo(walk_to::WalkToCommand),

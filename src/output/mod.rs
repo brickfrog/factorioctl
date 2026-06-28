@@ -247,6 +247,43 @@ impl Outputable for crate::world::SituationReport {
     }
 }
 
+impl Outputable for crate::world::ProductionReport {
+    fn format_human(&self) -> String {
+        let mut lines = vec![format!(
+            "Production: {}/{} working",
+            self.working_count, self.total
+        )];
+        if self.entities.is_empty() {
+            lines.push("  No producing entities found".to_string());
+        } else {
+            for entity in &self.entities {
+                lines.push(format!(
+                    "  {} @ ({:.1}, {:.1}): {} [products_finished={}]",
+                    entity.name,
+                    entity.position.x,
+                    entity.position.y,
+                    entity.status,
+                    entity
+                        .products_finished
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| "N/A".to_string())
+                ));
+            }
+        }
+        if self.status_counts.is_empty() {
+            lines.push("  Status counts: none".to_string());
+        } else {
+            let counts: Vec<String> = self
+                .status_counts
+                .iter()
+                .map(|(status, count)| format!("{} x{}", status, count))
+                .collect();
+            lines.push(format!("  Status counts: {}", counts.join(", ")));
+        }
+        lines.join("\n")
+    }
+}
+
 impl Outputable for crate::world::MineResult {
     fn format_human(&self) -> String {
         if !self.success {
