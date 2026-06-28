@@ -550,21 +550,19 @@ end)
     }
 
     pub fn set_walk_target(agent_id: &AgentId, position: Position) -> String {
-        let resolve = Self::resolve_optional(agent_id);
+        let resolve = Self::resolve_required(agent_id);
         format!(
             r#"
 {}
 if remote.interfaces["claude_interface"] and remote.interfaces["claude_interface"]["set_walk_target"] then
-    if c and c.valid then remote.call("claude_interface", "register_character", "{}", c) end
+    remote.call("claude_interface", "register_character", "{}", c)
     remote.call("claude_interface", "set_walk_target", "{}", {}, {})
     storage.factorioctl_walk_targets = storage.factorioctl_walk_targets or {{}}
     storage.factorioctl_walk_targets["{}"] = nil
 else
-if c and c.valid then
 storage.factorioctl_walk_targets = storage.factorioctl_walk_targets or {{}}
 storage.factorioctl_walk_targets["{}"] = {{ x = {}, y = {}, stuck_ticks = 0, expires_tick = game.tick + 7200, last_x = c.position.x, last_y = c.position.y }}
 {}
-end
 end
 "#,
             resolve,
