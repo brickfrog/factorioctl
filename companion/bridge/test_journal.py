@@ -19,10 +19,18 @@ class JournalTests(unittest.TestCase):
             "journal._reflection_file",
             side_effect=lambda agent_name: self.base / f".reflection-{agent_name}.json",
         )
+        # _finalize_reply also persists the objective ledger; patch its path too
+        # so tests never write .ledger-*.json into the repo working tree.
+        self.ledger_patch = mock.patch(
+            "ledger._ledger_file",
+            side_effect=lambda agent_name: self.base / f".ledger-{agent_name}.json",
+        )
         self.journal_patch.start()
         self.reflection_patch.start()
+        self.ledger_patch.start()
         self.addCleanup(self.journal_patch.stop)
         self.addCleanup(self.reflection_patch.stop)
+        self.addCleanup(self.ledger_patch.stop)
 
     def test_append_event_loads_recent_events_in_file_order_and_respects_limit(self):
         journal.append_event("doug", "discovery", "Found copper east of spawn")
@@ -129,6 +137,23 @@ error_tips:
         self.assertIn("Iron smelter at spawn", rendered)
         self.assertIn("ERROR TIPS", rendered)
         self.assertIn("Use rotate_entity after placement", rendered)
+
+    def test_journal_helpers_are_total_on_bad_input(self):
+        # None/non-str/non-dict inputs must never raise (audit round 1).
+        self.assertIsNone(journal.parse_reflection(None))
+        self.assertEqual(journal.strip_reflection_trailer(None), "")
+        journal.save_reflection("doug", None)  # must not raise
+        self.assertEqual(journal.load_reflection("doug"), journal.default_reflection())
+        self.assertEqual(journal.render_memory("oops", "nope"), "")
+        self.assertEqual(journal.render_memory(["notadict", 42], None), "")
+        self.assertIsInstance(journal.render_memory([{"bad": 1}], None), str)
+
+    def test_count_events_ignores_corrupt_lines(self):
+        path = self.base / ".journal-doug.jsonl"
+        path.write_text('{not json\n{"ts":"t","kind":"progress","text":"ok"}\n')
+
+        self.assertEqual(journal.count_events("doug"), 1)
+        self.assertEqual(len(journal.load_events("doug")), 1)
 
     def test_finalize_reply_applies_reflection_and_journals_ledger_progress(self):
         import pipe

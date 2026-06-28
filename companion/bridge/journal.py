@@ -36,6 +36,8 @@ def _str_list(value) -> list:
 
 
 def _normalize(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return default_reflection()
     updated_at = data.get("updated_at", "")
     return {
         "structures": _str_list(data.get("structures", [])),
@@ -91,9 +93,18 @@ def load_events(agent_name: str, limit: int = 20) -> list[dict]:
 
 def count_events(agent_name: str) -> int:
     try:
-        return len(_journal_file(agent_name).read_text().splitlines())
+        raw_lines = _journal_file(agent_name).read_text().splitlines()
     except (ValueError, OSError):
         return 0
+    count = 0
+    for line in raw_lines:
+        try:
+            data = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict):
+            count += 1
+    return count
 
 
 def should_reflect(event_count: int, interval: int = 16) -> bool:
@@ -137,6 +148,8 @@ def save_reflection(agent_name: str, reflection: dict) -> None:
 
 
 def parse_reflection(text: str) -> dict | None:
+    if not isinstance(text, str):
+        return None
     match = REFLECTION_RE.search(text)
     if not match:
         return None
@@ -186,6 +199,8 @@ def apply_reflection_update(agent_name: str, text: str) -> dict:
 
 
 def strip_reflection_trailer(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
     if not REFLECTION_RE.search(text):
         return text
     stripped = REFLECTION_RE.sub("", text)
@@ -194,9 +209,11 @@ def strip_reflection_trailer(text: str) -> str:
 
 
 def render_memory(events: list[dict], reflection: dict) -> str:
-    recent_events = list(events or [])[-5:]
-    structures = _str_list((reflection or {}).get("structures", []))
-    error_tips = _str_list((reflection or {}).get("error_tips", []))
+    events = events if isinstance(events, list) else []
+    reflection = reflection if isinstance(reflection, dict) else {}
+    recent_events = [e for e in events[-5:] if isinstance(e, dict)]
+    structures = _str_list(reflection.get("structures", []))
+    error_tips = _str_list(reflection.get("error_tips", []))
     if not recent_events and not structures and not error_tips:
         return ""
 
