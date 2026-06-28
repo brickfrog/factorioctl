@@ -1,0 +1,232 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import skills
+
+
+class SkillTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.base = Path(self.tempdir.name)
+        self.file_patch = mock.patch(
+            "skills._skills_file",
+            side_effect=lambda: self.base / ".skills.json",
+        )
+        self.ledger_patch = mock.patch(
+            "ledger._ledger_file",
+            side_effect=lambda agent_name: self.base / f".ledger-{agent_name}.json",
+        )
+        self.journal_patch = mock.patch(
+            "journal._journal_file",
+            side_effect=lambda agent_name: self.base / f".journal-{agent_name}.jsonl",
+        )
+        self.reflection_patch = mock.patch(
+            "journal._reflection_file",
+            side_effect=lambda agent_name: self.base / f".reflection-{agent_name}.json",
+        )
+        self.file_patch.start()
+        self.ledger_patch.start()
+        self.journal_patch.start()
+        self.reflection_patch.start()
+        self.addCleanup(self.file_patch.stop)
+        self.addCleanup(self.ledger_patch.stop)
+        self.addCleanup(self.journal_patch.stop)
+        self.addCleanup(self.reflection_patch.stop)
+
+    def test_load_returns_starters_for_missing_and_corrupt_file(self):
+        missing = skills.load_library()
+
+        self.assertGreaterEqual(len(missing["skills"]), 3)
+        self.assertIn("build_burner_mining_setup", self._names(missing))
+
+        (self.base / ".skills.json").write_text("{not json")
+
+        corrupt = skills.load_library()
+        self.assertIn("lay_smelting_line", self._names(corrupt))
+
+    def test_parse_skill_trailer_extracts_well_formed_block(self):
+        parsed = skills.parse_skill_trailer(
+            """Visible text.
+<skill>
+name: feed_lab
+params: lab_pos, science_belt_pos
+steps:
+- check_placement for the lab and belt-adjacent inserter
+- place_entity lab at lab_pos
+- route_belt science packs to science_belt_pos
+- place inserters with correct facing from belt to lab
+outcome: lab consumes automation science packs
+</skill>
+"""
+        )
+
+        self.assertEqual(parsed["name"], "feed_lab")
+        self.assertEqual(parsed["params"], ["lab_pos", "science_belt_pos"])
+        self.assertEqual(len(parsed["steps"]), 4)
+        self.assertEqual(parsed["outcome"], "lab consumes automation science packs")
+
+    def test_parse_skill_trailer_none_without_block_or_name_and_partial_ok(self):
+        self.assertIsNone(skills.parse_skill_trailer("Plain narration only."))
+        self.assertIsNone(skills.parse_skill_trailer("<skill>\nsteps:\n- place_entity\n</skill>"))
+
+        parsed = skills.parse_skill_trailer("<skill>\nname: scout_coal\noutcome: coal located\n</skill>")
+
+        self.assertEqual(parsed, {"name": "scout_coal", "outcome": "coal located"})
+
+    def test_parse_params_accepts_comma_list_and_bullets(self):
+        parsed = skills.parse_skill_trailer(
+            """<skill>
+name: two_param_recipe
+params:
+- start_pos
+- end_pos
+steps:
+- route_belt from start_pos to end_pos
+outcome: belt is routed
+</skill>"""
+        )
+
+        self.assertEqual(parsed["params"], ["start_pos", "end_pos"])
+
+    def test_apply_skill_update_adds_replaces_persists_and_round_trips(self):
+        added = skills.apply_skill_update(
+            """<skill>
+name: build_power_pair
+params: water_pos, coal_belt_pos
+steps:
+- place_entity offshore-pump at water_pos
+- place_entity boiler next to the pump
+- place_entity steam-engine after the boiler
+outcome: starter steam power online
+</skill>"""
+        )
+
+        self.assertEqual(skills.get_skill(added, "build_power_pair")["outcome"], "starter steam power online")
+        self.assertEqual(
+            skills.get_skill(skills.load_library(), "build_power_pair")["steps"][0],
+            "place_entity offshore-pump at water_pos",
+        )
+
+        replaced = skills.apply_skill_update(
+            """<skill>
+name: build_power_pair
+params: water_pos
+steps:
+- check_placement for pump, boiler, and steam engine
+- place_entity offshore-pump at water_pos
+outcome: verified starter steam power online
+</skill>"""
+        )
+
+        skill = skills.get_skill(replaced, "build_power_pair")
+        self.assertEqual(skill["params"], ["water_pos"])
+        self.assertEqual(skill["outcome"], "verified starter steam power online")
+        self.assertEqual(len([s for s in replaced["skills"] if s["name"] == "build_power_pair"]), 1)
+
+    def test_apply_skill_update_noops_without_valid_block(self):
+        before = skills.load_library()
+
+        after = skills.apply_skill_update("No skill here.")
+
+        self.assertEqual(after, before)
+
+    def test_strip_skill_trailer_removes_only_block_and_is_idempotent(self):
+        text = "Before.\n\n<skill>\nname: hidden\n</skill>\n\nAfter."
+
+        stripped = skills.strip_skill_trailer(text)
+
+        self.assertEqual(stripped, "Before.\n\nAfter.")
+        self.assertEqual(skills.strip_skill_trailer(stripped), "Before.\n\nAfter.")
+        self.assertEqual(skills.strip_skill_trailer(None), "")
+
+    def test_render_skills_signatures_only(self):
+        self.assertEqual(skills.render_skills({}), "")
+        self.assertEqual(skills.render_skills(None), "")
+        library = {
+            "skills": [{
+                "name": "feed_lab",
+                "params": ["lab_pos", "science_belt_pos"],
+                "steps": ["place_entity lab", "route_belt science packs"],
+                "outcome": "lab consumes science packs",
+            }]
+        }
+
+        rendered = skills.render_skills(library)
+
+        self.assertIn("Available skills", rendered)
+        self.assertIn("feed_lab(lab_pos, science_belt_pos)", rendered)
+        self.assertIn("lab consumes science packs", rendered)
+        self.assertNotIn("place_entity lab", rendered)
+
+    def test_helpers_are_total_on_bad_input(self):
+        self.assertIsNone(skills.parse_skill_trailer(None))
+        self.assertEqual(skills.strip_skill_trailer(42), "")
+        self.assertEqual(skills.render_skills("oops"), "")
+        self.assertIsNone(skills.get_skill(None, "feed_lab"))
+        self.assertIsNone(skills.get_skill({"skills": "oops"}, None))
+        skills.save_library(None)
+        self.assertIn("build_burner_mining_setup", self._names(skills.load_library()))
+
+    def test_finalize_reply_applies_and_strips_skill_block(self):
+        import pipe
+
+        finalized = pipe._finalize_reply(
+            """Done.
+<skill>
+name: feed_lab_fast
+params: lab_pos
+steps:
+- place_entity lab at lab_pos
+outcome: lab ready for science
+</skill>
+""",
+            "doug",
+        )
+
+        self.assertEqual(finalized, "Done.")
+        self.assertEqual(
+            skills.get_skill(skills.load_library(), "feed_lab_fast")["outcome"],
+            "lab ready for science",
+        )
+
+    def test_autonomy_tick_injects_skill_signatures_and_nudge(self):
+        import pipe
+
+        skills.apply_skill_update(
+            """<skill>
+name: feed_lab_fast
+params: lab_pos
+steps:
+- place_entity lab at lab_pos
+outcome: lab ready for science
+</skill>"""
+        )
+
+        class StubRCON:
+            def execute(self, _cmd):
+                return ""
+
+        thread = pipe.AgentThread.__new__(pipe.AgentThread)
+        thread.agent_name = "doug"
+        thread.rcon = StubRCON()
+        thread._exec_ticks_since_plan = 0
+        thread._planner_interval = 5
+        thread._planner_model = None
+        thread._reflect_interval = 16
+
+        prompt = thread._compose_autonomy_prompt()
+
+        self.assertIn("feed_lab_fast(lab_pos)", prompt)
+        self.assertIn("Prefer reusing an existing skill", prompt)
+        self.assertIn("<skill>", prompt)
+        self.assertIn("name: lay_smelting_line", prompt)
+
+    def _names(self, library):
+        return {skill["name"] for skill in library["skills"]}
+
+
+if __name__ == "__main__":
+    unittest.main()
