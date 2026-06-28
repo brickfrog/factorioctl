@@ -612,9 +612,9 @@ class AgentThread:
         self.agent = agent
         self.agent_name = agent["name"]
         self.system_prompt = agent["system_prompt"]
-        # Tiered models: default to the fast "haiku" tier (.env -> glm-4.6) for
-        # the frequent execution/reflection/chat ticks; planner ticks override
-        # up to "sonnet" (.env -> glm-5.2) via _planner_model below.
+        # Tiered models: default to the fast "haiku" tier (.env -> glm-5-turbo)
+        # for the frequent execution/reflection/chat ticks; planner ticks
+        # override up to "sonnet" (.env -> glm-5.2) via _planner_model below.
         self.model = model or agent.get("model") or "haiku"
         self.max_turns = agent.get("max_turns", 15)
         self.telemetry_name = agent.get("telemetry_name", self.agent_name)
