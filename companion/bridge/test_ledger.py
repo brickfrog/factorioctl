@@ -141,11 +141,29 @@ progress: Started the science plan
 
         self.assertEqual(ledger.load_ledger("doug"), ledger.default_ledger())
 
-    def test_strip_ledger_only_reply_is_empty(self):
-        # Documents the empty-after-strip case the handle_message guard handles.
-        only_block = "<ledger>\nobjective: x\nprogress: y\n</ledger>"
+    def test_finalize_reply_guards_ledger_only_and_persists(self):
+        # The real F2 seam: a ledger-only reply must finalize to a non-empty
+        # placeholder AND the ledger must still be persisted. Deleting the guard
+        # in _finalize_reply makes this return "" and fail.
+        pipe = importlib.import_module("pipe")
 
-        self.assertEqual(ledger.strip_ledger_trailer(only_block), "")
+        finalized = pipe._finalize_reply(
+            "<ledger>\nobjective: Smelt iron\nprogress: placed a furnace\n</ledger>",
+            "doug",
+        )
+
+        self.assertEqual(finalized, "(action complete)")
+        self.assertEqual(ledger.load_ledger("doug")["objective"], "Smelt iron")
+
+    def test_finalize_reply_keeps_narration_and_strips_block(self):
+        pipe = importlib.import_module("pipe")
+
+        finalized = pipe._finalize_reply(
+            "Heading to the iron patch.\n\n<ledger>\nprogress: walking\n</ledger>",
+            "doug",
+        )
+
+        self.assertEqual(finalized, "Heading to the iron patch.")
 
     def test_save_is_atomic_and_leaves_no_tmp(self):
         ledger.save_ledger("doug", ledger.default_ledger())

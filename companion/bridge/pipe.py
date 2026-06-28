@@ -328,6 +328,18 @@ def _ts():
     return datetime.now().strftime("%H:%M:%S")
 
 
+def _finalize_reply(reply: str, agent_name: str) -> str:
+    """Persist any <ledger> trailer the agent emitted, strip it from the
+    human-visible reply, and fall back to a placeholder if the reply was ONLY a
+    ledger block (so the bridge never logs/sends a blank message). This is the
+    tested seam for the ledger persist + empty-reply guard."""
+    apply_ledger_update(agent_name, reply)
+    reply = strip_ledger_trailer(reply)
+    if not reply.strip():
+        return "(action complete)"
+    return reply
+
+
 def handle_message(
     prompt: str,
     mcp_config: Path,
@@ -467,11 +479,7 @@ def handle_message(
     # Send response — join all text parts so intermediate messages aren't lost
     reply = "\n\n".join(text_parts) if text_parts else "(action complete)"
     reply = sanitize_response(reply)
-    apply_ledger_update(agent_name, reply)
-    reply = strip_ledger_trailer(reply)
-    # A reply that was ONLY a <ledger> block strips to empty — don't log/send blank.
-    if not reply.strip():
-        reply = "(action complete)"
+    reply = _finalize_reply(reply, agent_name)
 
     print(f"[{tname}] {reply}\n")
     sections = parse_response(reply)
