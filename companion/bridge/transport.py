@@ -65,7 +65,13 @@ def pre_place_character(rcon, agent_name: str, planet: str, spawn_offset: int = 
     spawn_offset shifts the X position to avoid overlapping with the player.
     Returns status: already_placed, teleported, created, surface_not_found, creation_failed.
 
-    All character state lives in mod storage (synced in MP) — no _G.global usage."""
+    All character state lives in mod storage (synced in MP) — no _G.global usage.
+    The live entity is also synced into factorioctl's level-script registry
+    (storage.factorioctl_characters[agent_id]) so the agent's factorioctl MCP
+    tools — which resolve bodies via that table — actually find it. Without that
+    sync the agent is a ghost: registered in the mod, invisible to every
+    walk/mine/build tool. pre_place runs in the level-script context, so it can
+    write storage.factorioctl_characters directly."""
     spawn_x = spawn_offset * 5 + 5  # offset from player spawn at (0,0)
     lua_code = (
         f'local agent_id = "{agent_name}" '
@@ -74,16 +80,21 @@ def pre_place_character(rcon, agent_name: str, planet: str, spawn_offset: int = 
         # Force terrain generation around spawn (4 chunks ≈ 128 tiles)
         f'target_surface.request_to_generate_chunks({{{spawn_x}, 0}}, 4) '
         'target_surface.force_generate_chunk_requests() '
+        'local status '
         'local c = remote.call("claude_interface", "get_character", agent_id) '
         'if c and c.valid then '
-        f'  if c.surface.name == "{planet}" then rcon.print("already_placed") return end '
-        f'  c.teleport({{{spawn_x}, 0}}, target_surface) '
-        '  rcon.print("teleported") return '
+        f'  if c.surface.name == "{planet}" then status = "already_placed" '
+        f'  else c.teleport({{{spawn_x}, 0}}, target_surface) status = "teleported" end '
+        'else '
+        f'  c = target_surface.create_entity{{name = "character", position = {{{spawn_x}, 0}}, force = game.forces.player}} '
+        '  if c then remote.call("claude_interface", "register_character", agent_id, c) status = "created" end '
         'end '
-        f'local new_char = target_surface.create_entity{{name = "character", position = {{{spawn_x}, 0}}, force = game.forces.player}} '
-        'if new_char then '
-        '  remote.call("claude_interface", "register_character", agent_id, new_char) '
-        '  rcon.print("created") '
+        'if c and c.valid then '
+        '  storage.factorioctl_characters = storage.factorioctl_characters or {} '
+        '  storage.factorioctl_entities = storage.factorioctl_entities or {} '
+        '  storage.factorioctl_characters[agent_id] = c '
+        '  storage.factorioctl_entities[c.unit_number] = c '
+        '  rcon.print(status) '
         'else '
         '  rcon.print("creation_failed") '
         'end'
