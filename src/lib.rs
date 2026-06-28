@@ -6,6 +6,12 @@
 //! - World model types (entities, resources, tiles, inventories)
 //! - Server process management
 
+// Vestigial API surface from the original factorioctl fork: many lib types
+// expose methods/fields the agent path doesn't call, and several re-exports are
+// used by one bin (mcp) but not another (factorioctl). Suppress the noise here;
+// deep pruning is a separate cleanup, not worth breaking cross-bin imports over.
+#![allow(dead_code, unused_imports, unused_mut)]
+
 pub mod analyze;
 pub mod cli;
 pub mod client;

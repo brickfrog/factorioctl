@@ -94,9 +94,15 @@ case "$CMD" in
         # Shortcut: fresh = restart fresh
         FRESH=true
         stop_server 2>/dev/null || true
-        # Clear stale sessions so agents start clean
-        rm -f "$PROJECT_ROOT/bridge/.session-"*.json
-        echo "Cleared agent sessions"
+        # Fresh world = blank slate: wipe ALL persistent agent memory, or the
+        # agent boots believing it already finished a factory that no longer
+        # exists (stale ledger/journal) and just spins re-scanning.
+        rm -f "$PROJECT_ROOT/bridge/.session-"*.json \
+              "$PROJECT_ROOT/bridge/.ledger-"*.json \
+              "$PROJECT_ROOT/bridge/.journal-"*.jsonl \
+              "$PROJECT_ROOT/bridge/.reflection-"*.json \
+              "$PROJECT_ROOT/bridge/.skills.json"
+        echo "Cleared agent memory (sessions, ledger, journal, reflection, skills)"
         sleep 2
         sync_mod
         start_server

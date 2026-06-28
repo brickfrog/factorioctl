@@ -1,5 +1,8 @@
 //! factorioctl - CLI tool for controlling Factorio headless servers via RCON
 
+// The bin recompiles the lib modules; suppress vestigial-fork dead code here too.
+#![allow(dead_code, unused_imports, unused_mut)]
+
 use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
