@@ -22,6 +22,21 @@ pub const PROXIMITY_RANGE_INSERT: f64 = 5.0;
 /// Maximum distance for setting recipes
 pub const PROXIMITY_RANGE_INTERACT: f64 = 5.0;
 
+/// Deserialize a `helpers.table_to_json` array response into a `Vec<T>`.
+///
+/// Factorio encodes an *empty* Lua table as the JSON object `{}` rather than an
+/// array `[]` (Lua can't tell the two apart), so any query that finds nothing
+/// returns `{}` and a plain `serde_json::from_str::<Vec<T>>` blows up with
+/// `invalid type: map, expected a sequence`. Treat `{}`/empty as an empty vec;
+/// anything else deserializes normally.
+fn parse_lua_array<T: serde::de::DeserializeOwned>(response: &str) -> Result<Vec<T>> {
+    let trimmed = response.trim();
+    if trimmed.is_empty() || trimmed == "{}" {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(trimmed)?)
+}
+
 /// High-level client for interacting with Factorio
 pub struct FactorioClient {
     rcon: RconClient,
@@ -151,7 +166,7 @@ impl FactorioClient {
     pub async fn get_surfaces(&mut self) -> Result<Vec<Surface>> {
         let lua = LuaCommand::get_surfaces();
         let response = self.execute_lua(&lua).await?;
-        let surfaces: Vec<Surface> = serde_json::from_str(&response)?;
+        let surfaces = parse_lua_array::<Surface>(&response)?;
         Ok(surfaces)
     }
 
@@ -166,7 +181,7 @@ impl FactorioClient {
     ) -> Result<Vec<Entity>> {
         let lua = LuaCommand::find_entities(area, entity_type, name);
         let response = self.execute_lua(&lua).await?;
-        let entities: Vec<Entity> = serde_json::from_str(&response)?;
+        let entities = parse_lua_array::<Entity>(&response)?;
         Ok(entities)
     }
 
@@ -190,7 +205,7 @@ impl FactorioClient {
     pub async fn verify_production(&mut self, area: Area) -> Result<Vec<EntityProduction>> {
         let lua = LuaCommand::verify_production(area);
         let response = self.execute_lua(&lua).await?;
-        let entities: Vec<EntityProduction> = serde_json::from_str(&response)?;
+        let entities = parse_lua_array::<EntityProduction>(&response)?;
         Ok(entities)
     }
 
@@ -204,7 +219,7 @@ impl FactorioClient {
     ) -> Result<Vec<ResourcePatch>> {
         let lua = LuaCommand::find_resources(area, resource_type);
         let response = self.execute_lua(&lua).await?;
-        let resources: Vec<ResourcePatch> = serde_json::from_str(&response)?;
+        let resources = parse_lua_array::<ResourcePatch>(&response)?;
         Ok(resources)
     }
 
@@ -226,7 +241,7 @@ impl FactorioClient {
     pub async fn get_tiles(&mut self, area: Area) -> Result<Vec<Tile>> {
         let lua = LuaCommand::get_tiles(area);
         let response = self.execute_lua(&lua).await?;
-        let tiles: Vec<Tile> = serde_json::from_str(&response)?;
+        let tiles = parse_lua_array::<Tile>(&response)?;
         Ok(tiles)
     }
 
@@ -310,7 +325,7 @@ impl FactorioClient {
     pub async fn get_recipes_by_category(&mut self, category: &str) -> Result<Vec<RecipeSummary>> {
         let lua = LuaCommand::get_recipes_by_category(category);
         let response = self.execute_lua(&lua).await?;
-        let recipes: Vec<RecipeSummary> = serde_json::from_str(&response)?;
+        let recipes = parse_lua_array::<RecipeSummary>(&response)?;
         Ok(recipes)
     }
 
@@ -318,7 +333,7 @@ impl FactorioClient {
     pub async fn get_recipes_for_item(&mut self, item: &str) -> Result<Vec<Recipe>> {
         let lua = LuaCommand::get_recipes_for_item(item);
         let response = self.execute_lua(&lua).await?;
-        let recipes: Vec<Recipe> = serde_json::from_str(&response)?;
+        let recipes = parse_lua_array::<Recipe>(&response)?;
         Ok(recipes)
     }
 
@@ -369,7 +384,7 @@ impl FactorioClient {
     pub async fn list_blueprints(&mut self) -> Result<Vec<crate::world::StoredBlueprint>> {
         let lua = LuaCommand::list_blueprints();
         let response = self.execute_lua(&lua).await?;
-        let result: Vec<crate::world::StoredBlueprint> = serde_json::from_str(&response)?;
+        let result = parse_lua_array::<crate::world::StoredBlueprint>(&response)?;
         Ok(result)
     }
 
@@ -1622,7 +1637,7 @@ rcon.print(helpers.table_to_json({{belt_count = #belts, total_items = total_item
             item_count: u32,
         }
 
-        let raw_belts: Vec<RawBeltLane> = serde_json::from_str(&response)?;
+        let raw_belts = parse_lua_array::<RawBeltLane>(&response)?;
 
         // Build the result with aggregated summary
         let mut total_items = 0u32;
@@ -1728,5 +1743,23 @@ mod tests {
         for response in ["ok", r#"{"inserted": 1}"#, r#"{"success": true}"#] {
             ensure_lua_success(response).expect("success response should remain accepted");
         }
+    }
+
+    #[test]
+    fn empty_lua_table_deserializes_as_empty_vec() {
+        // helpers.table_to_json({}) returns "{}" (object), not "[]". The situation
+        // report and every find_* query relied on this NOT exploding.
+        for response in ["{}", " {} ", ""] {
+            let parsed = parse_lua_array::<Surface>(response)
+                .expect("empty Lua table must yield an empty vec, not an error");
+            assert!(parsed.is_empty());
+        }
+    }
+
+    #[test]
+    fn populated_lua_array_still_deserializes() {
+        let parsed = parse_lua_array::<serde_json::Value>(r#"[{"name":"grass-1"},{"name":"water"}]"#)
+            .expect("a real array must still deserialize");
+        assert_eq!(parsed.len(), 2);
     }
 }
