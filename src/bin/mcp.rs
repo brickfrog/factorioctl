@@ -725,21 +725,21 @@ impl FactorioMcp {
 
         // Then fetch and clear messages
         let fetch_lua = factorioctl::client::lua::LuaCommand::get_and_clear_chat_messages();
-        let response = client.execute_lua(&fetch_lua).await.ok()?;
-
-        let messages: Vec<ChatMessage> = serde_json::from_str(&response).ok()?;
-
-        let formatted_messages = if messages.is_empty() {
-            None
-        } else {
-            let formatted: Vec<String> = messages
-                .iter()
-                .map(|m| format!("[{}]: {}", m.player, m.message))
-                .collect();
-            Some(format!(
-                "\n\n--- Player Messages ---\n{}",
-                formatted.join("\n")
-            ))
+        let formatted_messages = match client.execute_lua(&fetch_lua).await {
+            Ok(response) => match serde_json::from_str::<Vec<ChatMessage>>(&response) {
+                Ok(messages) if !messages.is_empty() => {
+                    let formatted: Vec<String> = messages
+                        .iter()
+                        .map(|m| format!("[{}]: {}", m.player, m.message))
+                        .collect();
+                    Some(format!(
+                        "\n\n--- Player Messages ---\n{}",
+                        formatted.join("\n")
+                    ))
+                }
+                _ => None,
+            },
+            Err(_) => None,
         };
 
         match (warning, formatted_messages) {
