@@ -484,6 +484,7 @@ local function process_walk_targets()
         local c = storage.characters[agent_id]
         if not (c and c.valid) then
             storage.walk_targets[agent_id] = nil
+            if storage.walk_state then storage.walk_state[agent_id] = nil end
             goto continue
         end
         if tgt.expires_tick and game.tick >= tgt.expires_tick then
@@ -735,12 +736,20 @@ remote.add_interface("claude_interface", {
     -- Set target position for deterministic agent step-walking (processed in on_tick)
     set_walk_target = function(agent_id, x, y)
         if not storage.walk_targets then storage.walk_targets = {} end
+        -- Drop any durable directional walk_state so it can't co-drive the
+        -- character alongside the teleport stepper (audit F1/F2).
+        if storage.walk_state then storage.walk_state[agent_id] = nil end
         storage.walk_targets[agent_id] = {x = x, y = y, stuck_ticks = 0, expires_tick = game.tick + 7200}
     end,
 
-    -- Clear target position for deterministic agent step-walking
+    -- Clear target position AND any leftover walk state for an agent. Must reset
+    -- walking_state too, or a stale {walking=true} keeps the orphan character
+    -- engine-walking with no target (audit F2 trapdoor).
     clear_walk_target = function(agent_id)
         if storage.walk_targets then storage.walk_targets[agent_id] = nil end
+        if storage.walk_state then storage.walk_state[agent_id] = nil end
+        local c = storage.characters and storage.characters[agent_id]
+        if c and c.valid then c.walking_state = {walking = false} end
     end,
 
     -- Report whether an agent has an active deterministic walk target
