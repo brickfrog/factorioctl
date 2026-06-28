@@ -317,6 +317,10 @@ def build_claude_cmd(
         "--permission-mode", "bypassPermissions",
         "--mcp-config", str(mcp_config),
         "--strict-mcp-config",
+        # Disable ALL built-in tools (Bash/Write/Read/Task/WebFetch/...). The
+        # agent gets ONLY the factorioctl MCP tools (incl. broadcast_thought).
+        # Stops the TaskCreate/TaskUpdate noise and the shell-out security hole.
+        "--tools", "",
         "--setting-sources", "local",
         "--system-prompt", system_prompt,
         "--max-turns", str(max_turns),
@@ -332,6 +336,29 @@ def build_claude_cmd(
 def _ts():
     """Short timestamp for log lines."""
     return datetime.now().strftime("%H:%M:%S")
+
+
+_BENIGN_STDERR = (
+    "claude.ai connectors are disabled",
+    "ANTHROPIC_API_KEY or another auth source is set",
+)
+
+# Matches an execution-tick progress note that says the plan/objective is done,
+# so the next autonomy tick re-plans instead of spinning "plan complete".
+_PLAN_DONE_RE = re.compile(
+    r"\b(?:plan|objective)\b.{0,40}\b(?:complete|completed|finished|achieved|done)\b"
+    r"|awaiting new|no changes|no further|nothing (?:to do|left|more)",
+    re.IGNORECASE,
+)
+
+
+def _is_benign_stderr(stderr: str) -> bool:
+    """True if every non-empty stderr line is known-benign CLI noise (the
+    z.ai/claude.ai connector warning), so it is NOT recorded as a failure."""
+    lines = [ln.strip() for ln in stderr.splitlines() if ln.strip()]
+    if not lines:
+        return True
+    return all(any(p in ln for p in _BENIGN_STDERR) for ln in lines)
 
 
 def _finalize_reply(reply: str, agent_name: str) -> str:
@@ -479,10 +506,13 @@ def handle_message(
             _active_procs.remove(proc)
 
     if proc.returncode != 0:
-        stderr = proc.stderr.read()
+        stderr = proc.stderr.read() if proc.stderr else ""
         if stderr and not text_parts:
             error_msg = f"Error: {stderr[:200]}"
-            append_event(agent_name, "failure", stderr.strip()[:200])
+            # Don't record benign CLI noise (the z.ai/claude.ai connector
+            # warning) as a journal "failure" — it poisons reflection's ERROR TIPS.
+            if not _is_benign_stderr(stderr):
+                append_event(agent_name, "failure", stderr.strip()[:200])
             print(f"[Error] {stderr.strip()}")
             emit_error(telemetry, error_msg, agent=tname)
             if player_index > 0:
@@ -656,15 +686,17 @@ class AgentThread:
     def _autonomy_tick(self) -> dict:
         """Choose plan/execute mode, update cadence state, and build the message."""
         ledger = load_ledger(self.agent_name)
-        memory = render_memory(
-            load_events(self.agent_name, 5),
-            load_reflection(self.agent_name),
-        )
+        events = load_events(self.agent_name, 5)
+        memory = render_memory(events, load_reflection(self.agent_name))
         ledger_text = render_ledger(ledger)
         skill_text = render_skills(load_library())
         mode = choose_autonomy_mode(
             ledger, self._exec_ticks_since_plan, self._planner_interval,
         )
+        # If the last tick reported the plan/objective finished, re-plan NOW
+        # instead of spinning "plan complete" for planner_interval ticks.
+        if mode == "execute" and events and _PLAN_DONE_RE.search(events[-1].get("text", "")):
+            mode = "plan"
         if mode == "plan":
             self._exec_ticks_since_plan = 0
         else:

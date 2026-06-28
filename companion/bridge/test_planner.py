@@ -72,13 +72,13 @@ class PlannerTests(unittest.TestCase):
         )
 
     def test_prompt_constants_keep_planner_and_execution_contracts(self):
-        self.assertIn("produce or refresh", planner.PLANNER_PROMPT.lower())
+        self.assertIn("3-6 step plan", planner.PLANNER_PROMPT.lower())
         self.assertIn("plan", planner.PLANNER_PROMPT.lower())
         self.assertIn("<ledger>", planner.PLANNER_PROMPT)
         self.assertIn("situation_report", planner.PLANNER_PROMPT)
 
         self.assertIn("do not re-plan", planner.EXECUTION_PROMPT.lower())
-        self.assertIn("committed plan", planner.EXECUTION_PROMPT.lower())
+        self.assertIn("committed objective and plan", planner.EXECUTION_PROMPT.lower())
         self.assertIn("<ledger>", planner.EXECUTION_PROMPT)
 
     def test_build_autonomy_prompt_joins_non_empty_parts(self):

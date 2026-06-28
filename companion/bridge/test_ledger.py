@@ -124,7 +124,7 @@ progress: Started the science plan
 
         # The planner deliberates (sets objective/plan); execution does not
         # re-plan.
-        self.assertIn("Finish before you switch", planner.PLANNER_PROMPT)
+        self.assertIn("unless it is finished or impossible", planner.PLANNER_PROMPT)
         self.assertIn("do not re-plan", planner.EXECUTION_PROMPT.lower())
 
     def test_load_normalizes_null_fields_and_apply_does_not_raise(self):
@@ -205,7 +205,7 @@ progress: Started the science plan
         prompt = thread._compose_autonomy_prompt()
 
         self.assertIn("Build a smelting column", prompt)
-        self.assertIn("execute the NEXT incomplete plan step", prompt)
+        self.assertIn("Do the next unfinished step", prompt)
 
 
 if __name__ == "__main__":
