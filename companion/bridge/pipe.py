@@ -943,8 +943,6 @@ def main():
     model = args.model or agent.get("model")
     max_turns = args.max_turns or agent.get("max_turns", 15)
     telemetry_name = agent.get("telemetry_name", agent_name)
-    if args.max_turns is not None:
-        agent = {**agent, "max_turns": args.max_turns}
 
     # Load persisted session
     session_id = load_session(agent_name)
@@ -1001,11 +999,6 @@ def main():
 
     # Watcher
     watcher = InputWatcher(input_file)
-    agent_thread = AgentThread(agent, mcp_config, rcon, telemetry, args.model,
-                               heartbeat_interval=args.heartbeat_interval,
-                               planner_interval=args.planner_interval,
-                               autonomy_requires_player=args.autonomy_requires_player)
-    agent_thread.start()
 
     print(f"\nWatching for messages... (Ctrl+C to stop)\n")
 
@@ -1018,7 +1011,33 @@ def main():
                 if target != agent_name:
                     continue
 
-                agent_thread.enqueue(msg)
+                player_index = msg.get("player_index", 1)
+                player_name = msg.get("player_name", "Player")
+                message = msg["message"]
+
+                print(f"[{player_name} -> {agent_name}] {message}")
+                emit_chat(telemetry, "player", message, agent=telemetry_name)
+
+                if player_index > 0:
+                    try:
+                        set_status(rcon, player_index, "[color=1,0.8,0.2]Thinking...[/color]")
+                    except Exception:
+                        pass
+
+                if not mcp_config:
+                    if player_index > 0:
+                        send_response(rcon, player_index, agent_name, "Error: factorioctl MCP not found")
+                    continue
+
+                new_session = handle_message(
+                    message, mcp_config, system_prompt, session_id,
+                    rcon, player_index, telemetry,
+                    agent_name=agent_name, telemetry_name=telemetry_name,
+                    model=model, max_turns=max_turns,
+                )
+                if new_session:
+                    session_id = new_session
+                    save_session(agent_name, session_id)
 
     except (KeyboardInterrupt, SystemExit):
         print("\nShutting down...")

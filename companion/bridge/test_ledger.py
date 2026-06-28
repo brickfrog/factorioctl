@@ -114,14 +114,16 @@ progress: Started the science plan
     def test_autonomy_prompts_keep_continuity_and_ledger_protocol(self):
         planner = importlib.import_module("planner")
 
+        # Invariants that BOTH prompts must preserve (hfb continuity + ledger
+        # protocol, u42 situation_report-over-three-scans guidance).
         for prompt in (planner.PLANNER_PROMPT, planner.EXECUTION_PROMPT):
             self.assertNotIn("check your current situation", prompt)
             self.assertIn("continuity", prompt.lower())
             self.assertIn("<ledger>", prompt)
+            self.assertIn("situation_report", prompt)
 
-        # situation_report guidance remains on the deliberative planner path,
-        # while execution explicitly avoids redundant scans and re-planning.
-        self.assertIn("situation_report", planner.PLANNER_PROMPT)
+        # The planner deliberates (sets objective/plan); execution does not
+        # re-plan.
         self.assertIn("Finish before you switch", planner.PLANNER_PROMPT)
         self.assertIn("do not re-plan", planner.EXECUTION_PROMPT.lower())
 
