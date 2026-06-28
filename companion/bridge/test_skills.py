@@ -224,6 +224,41 @@ outcome: lab ready for science
         self.assertIn("<skill>", prompt)
         self.assertIn("name: lay_smelting_line", prompt)
 
+    def test_execution_tick_keeps_skill_list_but_drops_full_format(self):
+        # On a cheap execution tick the compact skill LIST is injected, but the
+        # verbose save-a-new-skill <skill> format example is planner-only.
+        import ledger
+        import pipe
+
+        ledger.save_ledger("doug", {
+            "objective": "Smelt iron",
+            "plan_steps": ["place furnaces", "lay belt"],
+            "progress_notes": [],
+            "updated_at": "now",
+        })
+        skills.apply_skill_update(
+            "<skill>\nname: feed_lab_fast\nparams: lab_pos\nsteps:\n- do x\n"
+            "outcome: ready\n</skill>"
+        )
+
+        class StubRCON:
+            def execute(self, _cmd):
+                return ""
+
+        thread = pipe.AgentThread.__new__(pipe.AgentThread)
+        thread.agent_name = "doug"
+        thread.rcon = StubRCON()
+        thread._exec_ticks_since_plan = 0  # objective+plan set, 0 < interval -> execute
+        thread._planner_interval = 5
+        thread._planner_model = None
+        thread._reflect_interval = 16
+
+        prompt = thread._compose_autonomy_prompt()
+
+        self.assertIn("feed_lab_fast(lab_pos)", prompt)
+        self.assertNotIn("name: lay_smelting_line", prompt)
+        self.assertNotIn("save it as a <skill> block", prompt)
+
     def _names(self, library):
         return {skill["name"] for skill in library["skills"]}
 

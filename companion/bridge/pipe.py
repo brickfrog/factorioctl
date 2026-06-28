@@ -662,22 +662,6 @@ class AgentThread:
         )
         ledger_text = render_ledger(ledger)
         skill_text = render_skills(load_library())
-        skill_nudge = (
-            "Prefer reusing an existing skill over re-deriving a build; when you "
-            "perfect a new reusable build, save it as a <skill> block.\n"
-            "<skill>\n"
-            "name: lay_smelting_line\n"
-            "params: ore_belt_pos, furnace_count\n"
-            "steps:\n"
-            "- place N stone furnaces in a column\n"
-            "- route the ore belt past them and add input inserters\n"
-            "- add output inserters to a plates belt\n"
-            "outcome: iron/copper plates on the output belt\n"
-            "</skill>"
-        )
-        continuity_parts = [
-            part for part in (memory, ledger_text, skill_text, skill_nudge) if part
-        ]
         mode = choose_autonomy_mode(
             ledger, self._exec_ticks_since_plan, self._planner_interval,
         )
@@ -685,6 +669,25 @@ class AgentThread:
             self._exec_ticks_since_plan = 0
         else:
             self._exec_ticks_since_plan += 1
+        # The available-skills list is injected every tick (compact); the full
+        # save-a-new-skill format example is shown only on the deliberative
+        # planner tick so cheap execution ticks stay lean.
+        parts = [memory, ledger_text, skill_text]
+        if mode == "plan":
+            parts.append(
+                "Prefer reusing an existing skill over re-deriving a build; when "
+                "you perfect a new reusable build, save it as a <skill> block.\n"
+                "<skill>\n"
+                "name: lay_smelting_line\n"
+                "params: ore_belt_pos, furnace_count\n"
+                "steps:\n"
+                "- place N stone furnaces in a column\n"
+                "- route the ore belt past them and add input inserters\n"
+                "- add output inserters to a plates belt\n"
+                "outcome: iron/copper plates on the output belt\n"
+                "</skill>"
+            )
+        continuity_parts = [part for part in parts if part]
 
         message = build_autonomy_prompt(
             mode, "\n\n".join(continuity_parts), self._live_state_line(),
