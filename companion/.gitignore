@@ -18,6 +18,9 @@ bridge/.mcp-config*.json
 bridge/.sessions.json
 bridge/.session-*.json
 
+# factorioctl engine memory (runtime, written in cwd)
+.agent_memory.json
+
 # Python
 __pycache__/
 *.pyc
