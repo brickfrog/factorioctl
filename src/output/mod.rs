@@ -208,7 +208,9 @@ impl Outputable for crate::world::SituationReport {
                 self.health
                     .map(|h| format!("{:.0}", h))
                     .unwrap_or_else(|| "N/A".to_string()),
-                self.walking.unwrap_or(false)
+                self.walking
+                    .map(|w| w.to_string())
+                    .unwrap_or_else(|| "N/A".to_string())
             ),
         ];
         if self.inventory.is_empty() {
