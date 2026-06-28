@@ -335,9 +335,10 @@ impl FactorioClient {
     /// Create a native Factorio blueprint string from entities in an area
     pub async fn create_native_blueprint(
         &mut self,
+        agent_id: &AgentId,
         area: Area,
     ) -> Result<crate::world::NativeBlueprintExport> {
-        let lua = LuaCommand::create_native_blueprint(area);
+        let lua = LuaCommand::create_native_blueprint(agent_id, area);
         let response = self.execute_lua(&lua).await?;
         if response.contains("\"error\"") {
             #[derive(serde::Deserialize)]
@@ -354,10 +355,11 @@ impl FactorioClient {
     /// Save a blueprint to storage with a name
     pub async fn save_blueprint(
         &mut self,
+        agent_id: &AgentId,
         name: &str,
         area: Area,
     ) -> Result<crate::world::BlueprintSaveResult> {
-        let lua = LuaCommand::save_blueprint(name, area);
+        let lua = LuaCommand::save_blueprint(agent_id, name, area);
         let response = self.execute_lua(&lua).await?;
         let result: crate::world::BlueprintSaveResult = serde_json::from_str(&response)?;
         Ok(result)
@@ -382,11 +384,12 @@ impl FactorioClient {
     /// Place a saved blueprint at a position
     pub async fn place_blueprint(
         &mut self,
+        agent_id: &AgentId,
         name: &str,
         position: Position,
         direction: u8,
     ) -> Result<crate::world::BlueprintPlaceResult> {
-        let lua = LuaCommand::place_blueprint(name, position, direction);
+        let lua = LuaCommand::place_blueprint(agent_id, name, position, direction);
         let response = self.execute_lua(&lua).await?;
         let result: crate::world::BlueprintPlaceResult = serde_json::from_str(&response)?;
         Ok(result)
@@ -395,11 +398,12 @@ impl FactorioClient {
     /// Import and place a blueprint from a string
     pub async fn import_blueprint(
         &mut self,
+        agent_id: &AgentId,
         bp_string: &str,
         position: Position,
         direction: u8,
     ) -> Result<crate::world::BlueprintPlaceResult> {
-        let lua = LuaCommand::import_blueprint(bp_string, position, direction);
+        let lua = LuaCommand::import_blueprint(agent_id, bp_string, position, direction);
         let response = self.execute_lua(&lua).await?;
         let result: crate::world::BlueprintPlaceResult = serde_json::from_str(&response)?;
         Ok(result)

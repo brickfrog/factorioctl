@@ -173,21 +173,21 @@ fn all_lua_cases() -> Vec<LuaCase> {
         ),
         LuaCase::new(
             "create_native_blueprint",
-            LuaCommand::create_native_blueprint(area()),
+            LuaCommand::create_native_blueprint(&legacy_agent(), area()),
         ),
         LuaCase::new(
             "save_blueprint",
-            LuaCommand::save_blueprint("starter", area()),
+            LuaCommand::save_blueprint(&legacy_agent(), "starter", area()),
         ),
         LuaCase::new("list_blueprints", LuaCommand::list_blueprints()),
         LuaCase::new("get_blueprint", LuaCommand::get_blueprint("starter")),
         LuaCase::new(
             "place_blueprint",
-            LuaCommand::place_blueprint("starter", pos(26.0, 27.0), 4),
+            LuaCommand::place_blueprint(&legacy_agent(), "starter", pos(26.0, 27.0), 4),
         ),
         LuaCase::new(
             "import_blueprint",
-            LuaCommand::import_blueprint("0eNq-test", pos(28.0, 29.0), 8),
+            LuaCommand::import_blueprint(&legacy_agent(), "0eNq-test", pos(28.0, 29.0), 8),
         ),
         LuaCase::new("delete_blueprint", LuaCommand::delete_blueprint("starter")),
         LuaCase::new("register_chat_handler", LuaCommand::register_chat_handler()),
@@ -456,19 +456,19 @@ fn blueprint_commands_use_scratch_stack_without_name_only_restore() {
     for case in [
         LuaCase::new(
             "create_native_blueprint",
-            LuaCommand::create_native_blueprint(area()),
+            LuaCommand::create_native_blueprint(&named_agent(), area()),
         ),
         LuaCase::new(
             "save_blueprint",
-            LuaCommand::save_blueprint("starter", area()),
+            LuaCommand::save_blueprint(&named_agent(), "starter", area()),
         ),
         LuaCase::new(
             "place_blueprint",
-            LuaCommand::place_blueprint("starter", pos(26.0, 27.0), 4),
+            LuaCommand::place_blueprint(&named_agent(), "starter", pos(26.0, 27.0), 4),
         ),
         LuaCase::new(
             "import_blueprint",
-            LuaCommand::import_blueprint("0eNq-test", pos(28.0, 29.0), 8),
+            LuaCommand::import_blueprint(&named_agent(), "0eNq-test", pos(28.0, 29.0), 8),
         ),
     ] {
         assert!(
@@ -482,6 +482,64 @@ fn blueprint_commands_use_scratch_stack_without_name_only_restore() {
             case.name
         );
     }
+}
+
+#[test]
+fn blueprint_commands_are_agent_scoped_for_cjf_11() {
+    for case in [
+        LuaCase::new(
+            "create_native_blueprint",
+            LuaCommand::create_native_blueprint(&named_agent(), area()),
+        ),
+        LuaCase::new(
+            "save_blueprint",
+            LuaCommand::save_blueprint(&named_agent(), "starter", area()),
+        ),
+        LuaCase::new(
+            "place_blueprint",
+            LuaCommand::place_blueprint(&named_agent(), "starter", pos(26.0, 27.0), 4),
+        ),
+        LuaCase::new(
+            "import_blueprint",
+            LuaCommand::import_blueprint(&named_agent(), "0eNq-test", pos(28.0, 29.0), 8),
+        ),
+    ] {
+        assert!(
+            case.lua
+                .contains(r#"local c = storage.factorioctl_characters["doug"]"#),
+            "{} should resolve the named agent character",
+            case.name
+        );
+        assert!(
+            case.lua.contains("local inv = c.get_main_inventory()"),
+            "{} should use the agent character inventory",
+            case.name
+        );
+        assert!(
+            case.lua.contains("surface = c.surface")
+                || case.lua.contains("local surface = c.surface"),
+            "{} should use the agent character surface",
+            case.name
+        );
+        assert!(
+            !case.lua.contains("game.get_player(1)"),
+            "{} should not hardcode player 1",
+            case.name
+        );
+        assert!(
+            !case.lua.contains("game.surfaces[1]"),
+            "{} should not hardcode surface 1",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn chat_fetch_storage_init_does_not_restore_stale_handler_flag() {
+    let lua = LuaCommand::get_and_clear_chat_messages();
+
+    assert!(lua.contains("storage.factorioctl_chat = { messages = {} }"));
+    assert!(!lua.contains("handler_registered"));
 }
 
 #[test]
@@ -938,10 +996,13 @@ fn generated_lua_escapes_hostile_string_arguments_as_single_literals() {
             ),
             ("set_recipe", LuaCommand::set_recipe(47, raw)),
             ("get_recipe", LuaCommand::get_recipe(raw)),
-            ("save_blueprint", LuaCommand::save_blueprint(raw, area())),
+            (
+                "save_blueprint",
+                LuaCommand::save_blueprint(&legacy_agent(), raw, area()),
+            ),
             (
                 "import_blueprint",
-                LuaCommand::import_blueprint(raw, pos(1.0, 2.0), 0),
+                LuaCommand::import_blueprint(&legacy_agent(), raw, pos(1.0, 2.0), 0),
             ),
             ("start_research", LuaCommand::start_research(raw)),
         ] {
