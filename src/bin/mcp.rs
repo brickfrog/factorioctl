@@ -714,25 +714,39 @@ impl FactorioMcp {
 
         // First ensure the chat handler is registered
         let register_lua = factorioctl::client::lua::LuaCommand::register_chat_handler();
-        let _ = client.execute_lua(&register_lua).await;
+        let mut warning: Option<String> = None;
+        if let Err(err) = client.execute_lua(&register_lua).await {
+            eprintln!("Failed to register chat handler: {}", err);
+            warning = Some(format!(
+                "\n\n[warning: chat handler registration failed: {}]",
+                err
+            ));
+        }
 
         // Then fetch and clear messages
         let fetch_lua = factorioctl::client::lua::LuaCommand::get_and_clear_chat_messages();
-        let response = client.execute_lua(&fetch_lua).await.ok()?;
+        let formatted_messages = match client.execute_lua(&fetch_lua).await {
+            Ok(response) => match serde_json::from_str::<Vec<ChatMessage>>(&response) {
+                Ok(messages) if !messages.is_empty() => {
+                    let formatted: Vec<String> = messages
+                        .iter()
+                        .map(|m| format!("[{}]: {}", m.player, m.message))
+                        .collect();
+                    Some(format!(
+                        "\n\n--- Player Messages ---\n{}",
+                        formatted.join("\n")
+                    ))
+                }
+                _ => None,
+            },
+            Err(_) => None,
+        };
 
-        let messages: Vec<ChatMessage> = serde_json::from_str(&response).ok()?;
-
-        if messages.is_empty() {
-            None
-        } else {
-            let formatted: Vec<String> = messages
-                .iter()
-                .map(|m| format!("[{}]: {}", m.player, m.message))
-                .collect();
-            Some(format!(
-                "\n\n--- Player Messages ---\n{}",
-                formatted.join("\n")
-            ))
+        match (warning, formatted_messages) {
+            (Some(warning), Some(messages)) => Some(format!("{}{}", warning, messages)),
+            (Some(warning), None) => Some(warning),
+            (None, Some(messages)) => Some(messages),
+            (None, None) => None,
         }
     }
 
