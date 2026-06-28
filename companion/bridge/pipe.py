@@ -403,7 +403,7 @@ def handle_message(
     cmd = build_claude_cmd(prompt, mcp_config, system_prompt, session_id, model, max_turns)
 
     resume_tag = f" (resume {session_id[:8]}...)" if session_id else " (new session)"
-    print(f"  [{_ts()}] Spawning claude{resume_tag}")
+    print(f"  [{_ts()}] Spawning claude [model={model or 'default'}]{resume_tag}")
 
     # Unset CLAUDECODE to allow nested invocation
     env = os.environ.copy()
@@ -612,7 +612,10 @@ class AgentThread:
         self.agent = agent
         self.agent_name = agent["name"]
         self.system_prompt = agent["system_prompt"]
-        self.model = model or agent.get("model")
+        # Tiered models: default to the fast "haiku" tier (.env -> glm-4.6) for
+        # the frequent execution/reflection/chat ticks; planner ticks override
+        # up to "sonnet" (.env -> glm-5.2) via _planner_model below.
+        self.model = model or agent.get("model") or "haiku"
         self.max_turns = agent.get("max_turns", 15)
         self.telemetry_name = agent.get("telemetry_name", self.agent_name)
         self.mcp_config = mcp_config
@@ -630,7 +633,7 @@ class AgentThread:
             agent.get("planner_interval", planner_interval)
         )
         self._reflect_interval = int(agent.get("reflect_interval", 16))
-        self._planner_model = agent.get("planner_model")
+        self._planner_model = agent.get("planner_model") or "sonnet"
         # When True, autonomy ticks only fire while a human is connected to the
         # server, so the agent waits to "do its own thing" until you join (and
         # goes back to idle if you leave). Chat is always processed regardless.
