@@ -38,7 +38,7 @@ if [ -n "$MODEL" ]; then
 fi
 
 sync_mod() {
-    python3 "$PROJECT_ROOT/bridge/pipe.py" --sync-mod
+    uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/bridge/pipe.py" --sync-mod
 }
 
 start_server() {
@@ -64,7 +64,7 @@ start_bridge() {
     fi
     echo ""
     echo "Starting bridge (scale=$SCALE)..."
-    exec python3 "$PROJECT_ROOT/bridge/pipe.py" $flags $EXTRA_ARGS
+    exec uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/bridge/pipe.py" $flags $EXTRA_ARGS
 }
 
 case "$CMD" in

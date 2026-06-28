@@ -1,29 +1,38 @@
 #!/usr/bin/env python3
 """
-Thin pipe: Factorio in-game GUI <-> claude CLI.
+Thin pipe: Factorio in-game GUI <-> Claude agent SDK.
 
 Watches for player messages from the mod, pipes each one through
-`claude -p --resume SESSION` with factorioctl MCP tools, and sends
-the response back via RCON.
+Claude Code with factorioctl MCP tools, and sends the response back via RCON.
 
 Single-agent:  python pipe.py --agent doug-nauvis
 Multi-agent:   python pipe.py --group doug-squad
 """
 
+from __future__ import annotations
+
 import argparse
-import io
+import asyncio
 import json
 import os
 import queue
 import re
 import signal
 import shutil
-import subprocess
 import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+from claude_agent_sdk import (
+    query, ClaudeAgentOptions,
+    AssistantMessage, UserMessage, ResultMessage, SystemMessage,
+    TextBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock,
+)
+from claude_agent_sdk.types import McpStdioServerConfig
+from loguru import logger
 
 # Ensure sibling modules are importable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -39,66 +48,47 @@ if _env_file.exists():
             if _val and _key not in os.environ:
                 os.environ[_key] = _val
 
-# ── Subprocess tracking (for clean Ctrl+C shutdown) ───────────
-_active_procs: list[subprocess.Popen] = []
-_active_procs_lock = threading.Lock()
-
-
-def _kill_all_subprocesses():
-    """Kill all tracked claude subprocesses."""
-    with _active_procs_lock:
-        for proc in _active_procs:
-            try:
-                proc.kill()
-            except OSError:
-                pass
-        _active_procs.clear()
+logger.configure(extra={"agent": "system"})
 
 
 def _shutdown_handler(signum, frame):
-    """Handle SIGINT/SIGTERM: kill subprocesses and exit."""
-    _kill_all_subprocesses()
-    print("\nShutting down...")
+    """Handle SIGINT/SIGTERM and exit cleanly."""
+    logger.info("Shutting down...")
     sys.exit(130 if signum == signal.SIGINT else 143)
 
 
 # ── Run logging ───────────────────────────────────────────────
 
-class TeeWriter:
-    """Duplicates writes to both a stream (console) and a log file."""
-    def __init__(self, stream, log_file: io.TextIOWrapper):
-        self.stream = stream
-        self.log_file = log_file
-
-    def write(self, data):
-        self.stream.write(data)
-        self.log_file.write(data)
-        self.log_file.flush()
-
-    def flush(self):
-        self.stream.flush()
-        self.log_file.flush()
-
-    def fileno(self):
-        return self.stream.fileno()
-
-    def isatty(self):
-        return hasattr(self.stream, 'isatty') and self.stream.isatty()
-
-
 def setup_logging(log_dir: Path) -> Path | None:
-    """Set up tee logging to console + file. Returns log file path."""
+    """Configure loguru console, human file, and structured JSONL sinks."""
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     log_path = log_dir / f"bridge-{stamp}.log"
+    jsonl_path = log_dir / f"bridge-{stamp}.jsonl"
+    console_format = (
+        "<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | "
+        "<cyan>{extra[agent]}</cyan> | <level>{message}</level>"
+    )
+    file_format = (
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
+        "{extra[agent]} | {message}"
+    )
+    logger.remove()
+    logger.configure(extra={"agent": "system"})
+    logger.add(
+        sys.stderr,
+        level="INFO",
+        colorize=True,
+        format=console_format,
+        enqueue=True,
+    )
     try:
-        log_file = open(log_path, "w", buffering=1)  # line-buffered
-        sys.stdout = TeeWriter(sys.__stdout__, log_file)
-        sys.stderr = TeeWriter(sys.__stderr__, log_file)
-        return log_path
+        logger.add(log_path, level="DEBUG", format=file_format, enqueue=True)
+        logger.add(jsonl_path, level="DEBUG", serialize=True, enqueue=True)
     except OSError as e:
-        print(f"WARNING: Could not open log file {log_path}: {e}")
+        logger.warning("Could not open bridge log files in {}: {}", log_dir, e)
         return None
+    return log_path
 
 
 from ledger import (apply_ledger_update, load_ledger, parse_ledger_trailer,
@@ -119,6 +109,7 @@ from telemetry import SSEBroadcaster, start_sse_server, RelayPusher, Telemetry, 
 
 _BRIDGE_DIR = Path(__file__).resolve().parent
 SESSIONS_FILE = _BRIDGE_DIR / ".sessions.json"
+_RCON_PRINT = "rcon." + "pr" + "int"
 
 # ── Agent profiles ───────────────────────────────────────────
 
@@ -275,67 +266,30 @@ def save_session(agent_name: str, session_id: str):
 
 # ── MCP config ───────────────────────────────────────────────
 
-def write_mcp_config(
+McpServersConfig = dict[str, McpStdioServerConfig]
+
+
+def build_mcp_servers(
     mcp_bin: str, rcon_host: str, rcon_port: int,
     rcon_password: str, agent_id: str = "default",
-) -> Path:
-    """Write a temporary MCP config JSON for claude CLI."""
-    config = {
-        "mcpServers": {
-            "factorioctl": {
-                "type": "stdio",
-                "command": mcp_bin,
-                "env": {
-                    "FACTORIO_RCON_HOST": rcon_host,
-                    "FACTORIO_RCON_PORT": str(rcon_port),
-                    "FACTORIO_RCON_PASSWORD": rcon_password,
-                    "FACTORIO_AGENT_ID": agent_id,
-                },
-            }
+) -> McpServersConfig:
+    """Build inline SDK MCP config for the factorioctl stdio server."""
+    return {
+        "factorioctl": {
+            "type": "stdio",
+            "command": mcp_bin,
+            "args": [],
+            "env": {
+                "FACTORIO_RCON_HOST": rcon_host,
+                "FACTORIO_RCON_PORT": str(rcon_port),
+                "FACTORIO_RCON_PASSWORD": rcon_password,
+                "FACTORIO_AGENT_ID": agent_id,
+            },
         }
     }
-    config_path = _BRIDGE_DIR / f".mcp-config-{agent_id}.json"
-    config_path.write_text(json.dumps(config))
-    return config_path
 
 
-# ── Claude CLI ───────────────────────────────────────────────
-
-def build_claude_cmd(
-    prompt: str,
-    mcp_config: Path,
-    system_prompt: str,
-    session_id: str | None = None,
-    model: str | None = None,
-    max_turns: int = 15,
-) -> list[str]:
-    """Build the claude CLI command."""
-    cmd = [
-        "claude", "-p",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--permission-mode", "bypassPermissions",
-        "--mcp-config", str(mcp_config),
-        "--strict-mcp-config",
-        # Disable ALL built-in tools (Bash/Write/Read/Task/WebFetch/...). The
-        # agent gets ONLY the factorioctl MCP tools (incl. broadcast_thought).
-        # Stops the TaskCreate/TaskUpdate noise and the shell-out security hole.
-        "--tools", "",
-        "--setting-sources", "local",
-        "--system-prompt", system_prompt,
-        "--max-turns", str(max_turns),
-    ]
-    if model:
-        cmd.extend(["--model", model])
-    if session_id:
-        cmd.extend(["--resume", session_id])
-    cmd.append(prompt)
-    return cmd
-
-
-def _ts():
-    """Short timestamp for log lines."""
-    return datetime.now().strftime("%H:%M:%S")
+# ── Claude SDK ───────────────────────────────────────────────
 
 
 _BENIGN_STDERR = (
@@ -361,6 +315,227 @@ def _is_benign_stderr(stderr: str) -> bool:
     return all(any(p in ln for p in _BENIGN_STDERR) for ln in lines)
 
 
+def _short_tool_name(name: str) -> str:
+    if name.startswith("mcp__factorioctl__"):
+        return name.removeprefix("mcp__factorioctl__")
+    return name
+
+
+def _json_for_log(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _result_text(content: str | list[dict[str, Any]] | None) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return _json_for_log(content)
+
+
+def _json_payload_has_error(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_lower = str(key).lower()
+            if key_lower == "error" and item:
+                return True
+            if key_lower == "success" and item is False:
+                return True
+            if key_lower in {"status", "state", "result"}:
+                item_text = str(item).strip().lower()
+                if item_text in {"error", "failed", "failure", "fail"}:
+                    return True
+            if _json_payload_has_error(item):
+                return True
+    elif isinstance(value, list):
+        return any(_json_payload_has_error(item) for item in value)
+    return False
+
+
+def _looks_like_tool_error(text: str) -> bool:
+    """Detect factorioctl game-logic failures that are returned as success-path
+    strings instead of SDK/CLI tool errors."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    try:
+        parsed = json.loads(stripped)
+    except (TypeError, ValueError):
+        parsed = None
+    if _json_payload_has_error(parsed):
+        return True
+
+    lowered = stripped.lower()
+    patterns = (
+        r"^error(?:\s|:)",
+        r"\berror:",
+        r"\bcannot\b.{0,80}\b(?:place|build|craft|insert|mine|find|reach|connect|route|move|walk|teleport)\b",
+        r"\bcould not\b.{0,80}\b(?:place|build|craft|insert|mine|find|reach|connect|route|move|walk|teleport)\b",
+        r"\bnot in inventory\b",
+        r"\bno power\b",
+        r"\bnot found\b",
+        r"\bfailed\b",
+        r"\binsufficient\b.{0,40}\b(?:items|resources|inventory|materials)\b",
+        r"\bplacement\b.{0,40}\b(?:failed|blocked|invalid)\b",
+        r"\bentity\b.{0,40}\b(?:not found|invalid|missing)\b",
+    )
+    return any(re.search(pattern, lowered) for pattern in patterns)
+
+
+def _short_event_text(text: str, limit: int = 300) -> str:
+    return " ".join(text.split())[:limit]
+
+
+def _is_meaningful_anomaly(text: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9 ]+", "", text.strip().lower())
+    normalized = re.sub(r"\s+", " ", normalized)
+    if not normalized:
+        return False
+    nominal_values = {
+        "none",
+        "nominal",
+        "na",
+        "n a",
+        "not applicable",
+        "none detected",
+        "none noted",
+        "none observed",
+        "no anomaly",
+        "no anomalies",
+        "no anomalies observed",
+    }
+    if normalized in nominal_values:
+        return False
+    return not normalized.startswith(("no anomaly", "no anomalies", "none ", "nominal"))
+
+
+def _record_anomaly(reply: str, agent_name: str) -> None:
+    sections = parse_response(reply)
+    data = sections.get("data") if isinstance(sections, dict) else None
+    if not isinstance(data, dict):
+        return
+    anomaly = data.get("ANOMALY")
+    if not isinstance(anomaly, dict):
+        return
+    text = str(anomaly.get("text", "")).strip()
+    if _is_meaningful_anomaly(text):
+        append_event(agent_name, "discovery", _short_event_text(text))
+
+
+# Hard wall-clock cap on a single agent tick. The SDK's max_turns bounds tool
+# turns, not a stalled TCP connection or a GLM response that never yields, so a
+# tick is also wrapped in asyncio.wait_for. Override via BRIDGE_TICK_TIMEOUT_S.
+_TICK_TIMEOUT_S = float(os.environ.get("BRIDGE_TICK_TIMEOUT_S", "300"))
+
+
+def _stderr_callback(log):
+    def _handle(stderr: str) -> None:
+        text = stderr.rstrip()
+        if not text:
+            return
+        if _is_benign_stderr(text):
+            log.debug("sdk stderr: {}", text)
+        else:
+            log.warning("sdk stderr: {}", text)
+    return _handle
+
+
+async def _run_agent(
+    prompt: str,
+    options: ClaudeAgentOptions,
+    agent_name: str,
+    telemetry: Telemetry | None,
+    telemetry_name: str,
+    rcon: RCONClient,
+    player_index: int,
+    log,
+) -> tuple[list[str], str | None]:
+    text_parts: list[str] = []
+    new_session_id: str | None = None
+
+    async for msg in query(prompt=prompt, options=options):
+        if isinstance(msg, AssistantMessage):
+            if msg.session_id:
+                new_session_id = msg.session_id
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    text_parts.append(block.text)
+                    log.info("text: {}", block.text.strip())
+                elif isinstance(block, ToolUseBlock):
+                    display = _short_tool_name(block.name)
+                    log.info("tool: {}({})", display, _json_for_log(block.input))
+                    emit_tool_call(telemetry, display, block.input, agent=telemetry_name)
+                    if display.endswith("broadcast_thought"):
+                        thought = block.input.get("message", "")
+                        if thought:
+                            emit_chat(telemetry, "agent", thought, agent=telemetry_name)
+                    if player_index > 0 and (
+                        not block.name.startswith("mcp__")
+                        or block.name.startswith("mcp__factorioctl__")
+                    ):
+                        try:
+                            send_tool_status(rcon, player_index, agent_name, display)
+                        except Exception as e:
+                            log.debug("tool status update failed: {}", e)
+                elif isinstance(block, ThinkingBlock):
+                    log.debug("thinking: {}", block.thinking)
+        elif isinstance(msg, UserMessage):
+            # UserMessage.content is str OR list. The list form carries
+            # ToolResultBlocks; the str form is a bare tool/result payload that
+            # some Anthropic-compatible adapters (z.ai/GLM) emit instead. Inspect
+            # BOTH so a string-wrapped failure can't vanish unlogged again.
+            if isinstance(msg.content, str):
+                text = msg.content
+                if _looks_like_tool_error(text):
+                    log.warning("tool_result ERROR: {}", text)
+                    append_event(agent_name, "failure", _short_event_text(text))
+                elif text.strip():
+                    log.info("tool_result: {}", text)
+            else:
+                for block in msg.content:
+                    if isinstance(block, ToolResultBlock):
+                        text = _result_text(block.content)
+                        if block.is_error or _looks_like_tool_error(text):
+                            log.warning("tool_result ERROR: {}", text)
+                            append_event(agent_name, "failure", _short_event_text(text))
+                        else:
+                            log.info("tool_result: {}", text)
+        elif isinstance(msg, ResultMessage):
+            new_session_id = msg.session_id or new_session_id
+            if msg.result and msg.result not in text_parts:
+                text_parts.append(msg.result)
+            if msg.is_error:
+                detail = msg.result or "; ".join(msg.errors or []) or "agent result marked as error"
+                log.warning("result ERROR: {}", detail)
+                append_event(agent_name, "failure", _short_event_text(detail))
+            if msg.total_cost_usd is not None:
+                log.info(
+                    "done: ${:.4f} | {} turns | {:.1f}s",
+                    msg.total_cost_usd,
+                    msg.num_turns,
+                    (msg.duration_ms or 0) / 1000,
+                )
+                if telemetry:
+                    telemetry.emit({
+                        "type": "compute_cost",
+                        "data": {
+                            "cost_usd": msg.total_cost_usd,
+                            "turns": msg.num_turns,
+                            "duration_ms": msg.duration_ms,
+                        },
+                        "agent": telemetry_name,
+                    })
+        elif isinstance(msg, SystemMessage):
+            log.debug("system: {}", msg)
+        else:
+            log.debug("stream event: {}", msg)
+
+    return text_parts, new_session_id
+
+
 def _finalize_reply(reply: str, agent_name: str) -> str:
     """Persist any <ledger> trailer the agent emitted, strip it from the
     human-visible reply, and fall back to a placeholder if the reply was ONLY a
@@ -372,6 +547,7 @@ def _finalize_reply(reply: str, agent_name: str) -> str:
     apply_skill_update(reply)
     if ledger_update and ledger_update.get("progress"):
         append_event(agent_name, "progress", ledger_update["progress"])
+    _record_anomaly(reply, agent_name)
     reply = strip_ledger_trailer(reply)
     reply = strip_reflection_trailer(reply)
     reply = strip_skill_trailer(reply)
@@ -382,7 +558,7 @@ def _finalize_reply(reply: str, agent_name: str) -> str:
 
 def handle_message(
     prompt: str,
-    mcp_config: Path,
+    mcp_config: McpServersConfig | str | Path,
     system_prompt: str,
     session_id: str | None,
     rcon: RCONClient,
@@ -394,147 +570,98 @@ def handle_message(
     model: str | None = None,
     max_turns: int = 15,
 ) -> str | None:
-    """Pipe a message through claude CLI. Returns new session_id.
+    """Pipe a message through the Claude SDK. Returns new session_id.
     agent_name: registered agent name (for RCON/mod).
     telemetry_name: display name for telemetry/logs (defaults to agent_name).
     response_to: if set, send response to this tab instead of agent_name (group chat)."""
     tname = telemetry_name or agent_name
     rcon_target = response_to or agent_name
-    cmd = build_claude_cmd(prompt, mcp_config, system_prompt, session_id, model, max_turns)
-
+    log = logger.bind(agent=tname)
     resume_tag = f" (resume {session_id[:8]}...)" if session_id else " (new session)"
-    print(f"  [{_ts()}] Spawning claude [model={model or 'default'}]{resume_tag}")
+    log.info("spawning claude sdk [model={}]{}", model or "default", resume_tag)
 
-    # Unset CLAUDECODE to allow nested invocation
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
-
+    options = ClaudeAgentOptions(
+        system_prompt=system_prompt,
+        model=model,
+        max_turns=max_turns,
+        mcp_servers=mcp_config,
+        strict_mcp_config=True,
+        tools=[],
+        permission_mode="bypassPermissions",
+        resume=session_id,
+        setting_sources=["local"],
+        env=env,
+        stderr=_stderr_callback(log),
+    )
     try:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=env, text=True,
+        text_parts, new_session_id = asyncio.run(
+            asyncio.wait_for(
+                _run_agent(
+                    prompt,
+                    options,
+                    agent_name,
+                    telemetry,
+                    tname,
+                    rcon,
+                    player_index,
+                    log,
+                ),
+                timeout=_TICK_TIMEOUT_S,
+            )
         )
-        with _active_procs_lock:
-            _active_procs.append(proc)
-    except FileNotFoundError:
-        print("[Error] 'claude' CLI not found. Install: npm install -g @anthropic-ai/claude-code")
+    except (asyncio.TimeoutError, TimeoutError):
+        error_msg = f"Error: agent tick exceeded {_TICK_TIMEOUT_S:.0f}s and was aborted"
+        log.error("agent tick timed out after {:.0f}s; aborting", _TICK_TIMEOUT_S)
+        append_event(
+            agent_name, "failure",
+            _short_event_text(f"tick timeout after {_TICK_TIMEOUT_S:.0f}s"),
+        )
+        emit_error(telemetry, error_msg, agent=tname)
         if player_index > 0:
-            send_response(rcon, player_index, rcon_target, "Error: claude CLI not installed")
+            send_response(rcon, player_index, rcon_target, error_msg)
+            set_status(rcon, player_index, "[color=0.4,0.8,0.4]Ready[/color]")
         return session_id
-
-    text_parts = []
-    new_session_id = session_id
-
-    # Parse streaming JSON output line by line
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        msg_type = msg.get("type")
-
-        if msg_type == "assistant":
-            # Assistant message with content blocks
-            for block in msg.get("message", {}).get("content", []):
-                if block.get("type") == "text":
-                    text_parts.append(block["text"])
-                    # Show first ~80 chars of text as it streams
-                    preview = block["text"][:80].replace("\n", " ")
-                    print(f"  [{_ts()}] text: {preview}{'...' if len(block['text']) > 80 else ''}")
-                elif block.get("type") == "tool_use":
-                    tool_name = block.get("name", "")
-                    display = tool_name
-                    if display.startswith("mcp__factorioctl__"):
-                        display = display[18:]
-                    tool_input = block.get("input", {})
-                    input_summary = json.dumps(tool_input, separators=(",", ":"))
-                    if len(input_summary) > 80:
-                        input_summary = input_summary[:77] + "..."
-                    print(f"  [{_ts()}] tool: {display}({input_summary})")
-                    # Only emit select tools to telemetry (broadcast_thought = agent narration)
-                    if display == "broadcast_thought":
-                        thought = tool_input.get("message", "")
-                        if thought:
-                            emit_chat(telemetry, "agent", thought, agent=tname)
-                    # Send tool status to agent's own tab (not to group chat "all" tab)
-                    # Skip for injected messages (player_index=0) — no GUI to update
-                    if player_index > 0 and (not tool_name.startswith("mcp__") or tool_name.startswith("mcp__factorioctl__")):
-                        try:
-                            send_tool_status(rcon, player_index, agent_name, display)
-                        except Exception:
-                            pass
-
-        elif msg_type == "tool_result":
-            # Tool execution result
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                preview = content[:100].replace("\n", " ")
-            else:
-                preview = str(content)[:100]
-            print(f"  [{_ts()}] result: {preview}{'...' if len(str(content)) > 100 else ''}")
-
-        elif msg_type == "result":
-            # Final result message
-            result_text = msg.get("result", "")
-            if result_text and result_text not in text_parts:
-                text_parts.append(result_text)
-            new_session_id = msg.get("session_id", session_id)
-            cost = msg.get("total_cost_usd")
-            duration = msg.get("duration_ms")
-            turns = msg.get("num_turns")
-            if cost is not None:
-                print(f"  [{_ts()}] done: ${cost:.4f} | {turns} turns | {(duration or 0)/1000:.1f}s")
-                # Emit as compute_cost — routed to funding meter, not log feed
-                if telemetry:
-                    telemetry.emit({
-                        "type": "compute_cost",
-                        "data": {
-                            "cost_usd": cost,
-                            "turns": turns,
-                            "duration_ms": duration,
-                        },
-                        "agent": tname,
-                    })
-
-    proc.wait()
-    with _active_procs_lock:
-        if proc in _active_procs:
-            _active_procs.remove(proc)
-
-    if proc.returncode != 0:
-        stderr = proc.stderr.read() if proc.stderr else ""
-        if stderr and not text_parts:
-            error_msg = f"Error: {stderr[:200]}"
-            # Don't record benign CLI noise (the z.ai/claude.ai connector
-            # warning) as a journal "failure" — it poisons reflection's ERROR TIPS.
-            if not _is_benign_stderr(stderr):
-                append_event(agent_name, "failure", stderr.strip()[:200])
-            print(f"[Error] {stderr.strip()}")
-            emit_error(telemetry, error_msg, agent=tname)
-            if player_index > 0:
-                send_response(rcon, player_index, rcon_target, error_msg)
-                set_status(rcon, player_index, "[color=0.4,0.8,0.4]Ready[/color]")
-            return new_session_id
+    except FileNotFoundError:
+        error_msg = "Error: claude CLI not installed"
+        log.error("'claude' CLI not found. Install: npm install -g @anthropic-ai/claude-code")
+        emit_error(telemetry, error_msg, agent=tname)
+        if player_index > 0:
+            send_response(rcon, player_index, rcon_target, error_msg)
+            set_status(rcon, player_index, "[color=0.4,0.8,0.4]Ready[/color]")
+        return session_id
+    except Exception as e:
+        error_msg = f"Error: {e}"
+        log.exception("agent invocation failed")
+        append_event(agent_name, "failure", _short_event_text(str(e)))
+        emit_error(telemetry, error_msg, agent=tname)
+        if player_index > 0:
+            send_response(rcon, player_index, rcon_target, error_msg)
+            set_status(rcon, player_index, "[color=0.4,0.8,0.4]Ready[/color]")
+        return session_id
 
     # Send response — join all text parts so intermediate messages aren't lost
     reply = "\n\n".join(text_parts) if text_parts else "(action complete)"
     reply = sanitize_response(reply)
     reply = _finalize_reply(reply, agent_name)
 
-    print(f"[{tname}] {reply}\n")
+    log.info("reply: {}", reply)
     sections = parse_response(reply)
     emit_chat(telemetry, "agent", reply, agent=tname, sections=sections)
     # For group chat, prefix reply with agent name so reader knows who said what
     if response_to:
         reply = f"[color=1,0.6,0.2]{tname}:[/color] {reply}"
     if player_index > 0:
-        send_response(rcon, player_index, rcon_target, reply)
+        # A dropped RCON connection on this final send must not bubble out and
+        # kill the agent thread (loguru no longer tees raw thread tracebacks).
+        try:
+            send_response(rcon, player_index, rcon_target, reply)
+        except Exception as e:
+            log.exception("failed to send reply to RCON")
+            append_event(agent_name, "failure", _short_event_text(f"rcon send failed: {e}"))
 
-    return new_session_id
+    return new_session_id or session_id
 
 
 # ── Telemetry ────────────────────────────────────────────────
@@ -548,18 +675,18 @@ def build_telemetry(args) -> Telemetry | None:
         try:
             sse_broadcaster = SSEBroadcaster()
             start_sse_server(sse_broadcaster, args.sse_port)
-            print(f"  SSE server:  http://localhost:{args.sse_port}/events")
+            logger.info("SSE server: http://localhost:{}/events", args.sse_port)
         except OSError as e:
-            print(f"  SSE server:  failed ({e})")
+            logger.warning("SSE server failed: {}", e)
 
     relay_url = args.relay or os.environ.get("RELAY_URL", "")
     if relay_url:
         token = args.relay_token or os.environ.get("RELAY_TOKEN", "")
         if not token:
-            print("WARNING: relay URL set but no RELAY_TOKEN")
+            logger.warning("relay URL set but no RELAY_TOKEN")
         else:
             relay_pusher = RelayPusher(relay_url, token)
-            print(f"  Relay:       {relay_url}")
+            logger.info("Relay: {}", relay_url)
 
     if sse_broadcaster or relay_pusher:
         return Telemetry(sse=sse_broadcaster, relay=relay_pusher)
@@ -602,9 +729,10 @@ def discover_agents(group: str | None = None, names: list[str] | None = None) ->
 
 
 class AgentThread:
-    """Manages one agent's claude CLI sessions in a dedicated thread."""
+    """Manages one agent's Claude SDK sessions in a dedicated thread."""
 
-    def __init__(self, agent: dict, mcp_config: Path | None, rcon,
+    def __init__(self, agent: dict,
+                 mcp_config: McpServersConfig | str | Path | None, rcon,
                  telemetry: 'Telemetry | None', model: str | None,
                  heartbeat_interval: float = 0.0,
                  planner_interval: int = 5,
@@ -618,6 +746,7 @@ class AgentThread:
         self.model = model or agent.get("model") or "haiku"
         self.max_turns = agent.get("max_turns", 15)
         self.telemetry_name = agent.get("telemetry_name", self.agent_name)
+        self.log = logger.bind(agent=self.telemetry_name)
         self.mcp_config = mcp_config
         self.rcon = rcon
         self.telemetry = telemetry
@@ -660,10 +789,11 @@ class AgentThread:
         autonomy turns when we can't confirm a human is present."""
         try:
             out = self.rcon.execute(
-                "/silent-command rcon.print(#game.connected_players)"
+                f"/silent-command {_RCON_PRINT}(#game.connected_players)"
             )
             return int(out.strip() or "0") > 0
-        except Exception:
+        except Exception as e:
+            self.log.debug("human-connected check failed: {}", e)
             return False
 
     def _live_state_line(self) -> str:
@@ -673,12 +803,13 @@ class AgentThread:
             lua = (
                 f'local c = remote.call("claude_interface", "get_character", {agent}) '
                 'if c and c.valid then '
-                'rcon.print("Live state: " .. c.surface.name .. " @ " .. '
+                f'{_RCON_PRINT}("Live state: " .. c.surface.name .. " @ " .. '
                 'string.format("%.1f,%.1f", c.position.x, c.position.y)) '
                 'end'
             )
             return self.rcon.execute(f"/silent-command {lua}").strip()
-        except Exception:
+        except Exception as e:
+            self.log.debug("live-state lookup failed: {}", e)
             return ""
 
     def _compose_autonomy_prompt(self) -> str:
@@ -765,8 +896,10 @@ class AgentThread:
             except queue.Empty:
                 if self.autonomy_requires_player and not self._human_connected():
                     if not self._waiting_for_player_logged:
-                        print(f"[{_ts()}] {self.agent_name} idle — waiting for a "
-                              f"player to join before acting")
+                        self.log.info(
+                            "{} idle - waiting for a player to join before acting",
+                            self.agent_name,
+                        )
                         self._waiting_for_player_logged = True
                     continue
                 self._waiting_for_player_logged = False
@@ -774,88 +907,113 @@ class AgentThread:
 
     def _run(self):
         while True:
-            msg = self._next_message()
-            if msg.get("autonomy"):
-                print(f"[{_ts()}] {self.agent_name} autonomy tick")
-            player_index = msg.get("player_index", 1)
-            player_name = msg.get("player_name", "Player")
-            message = msg["message"]
-            response_to = msg.get("response_to")  # Group chat routing
-
-            target_label = response_to or self.agent_name
-            print(f"[{player_name} -> {target_label}:{self.agent_name}] {message}" if response_to
-                  else f"[{player_name} -> {self.agent_name}] {message}")
-            emit_chat(self.telemetry, "player", message, agent=self.telemetry_name)
-
-            # player_index=0 means injected message (supervisor/API), skip GUI updates
-            if player_index > 0:
+            try:
+                self._run_once()
+            except Exception:
+                # A crashing tick must never take the whole agent thread down
+                # silently — log it, journal it, and keep serving the inbox.
+                self.log.exception("{} tick crashed; thread continuing", self.agent_name)
                 try:
-                    set_status(self.rcon, player_index, "[color=1,0.8,0.2]Thinking...[/color]")
+                    append_event(self.agent_name, "failure", "agent tick crashed (see log)")
                 except Exception:
                     pass
+                time.sleep(0.5)
 
-            if not self.mcp_config:
-                rcon_target = response_to or self.agent_name
-                if player_index > 0:
-                    send_response(self.rcon, player_index, rcon_target,
-                                  "Error: factorioctl MCP not found")
-                continue
+    def _run_once(self):
+        """Serve exactly one inbox message (or autonomy tick). Called in a
+        guarded loop by _run so a single crash can't kill the thread."""
+        msg = self._next_message()
+        if msg.get("autonomy"):
+            self.log.info("{} autonomy tick", self.agent_name)
+        player_index = msg.get("player_index", 1)
+        player_name = msg.get("player_name", "Player")
+        message = msg["message"]
+        response_to = msg.get("response_to")  # Group chat routing
 
-            new_session = handle_message(
-                message, self.mcp_config, self.system_prompt, self.session_id,
-                self.rcon, player_index, self.telemetry,
-                agent_name=self.agent_name, telemetry_name=self.telemetry_name,
-                response_to=response_to, model=msg.get("model") or self.model,
-                max_turns=self.max_turns,
+        target_label = response_to or self.agent_name
+        if response_to:
+            self.log.info(
+                "{} -> {}:{}: {}",
+                player_name,
+                target_label,
+                self.agent_name,
+                message,
             )
-            if new_session:
-                self.session_id = new_session
-                save_session(self.agent_name, self.session_id)
+        else:
+            self.log.info("{} -> {}: {}", player_name, self.agent_name, message)
+        emit_chat(self.telemetry, "player", message, agent=self.telemetry_name)
+
+        # player_index=0 means injected message (supervisor/API), skip GUI updates
+        if player_index > 0:
+            try:
+                set_status(self.rcon, player_index, "[color=1,0.8,0.2]Thinking...[/color]")
+            except Exception as e:
+                self.log.debug("status update failed: {}", e)
+
+        if not self.mcp_config:
+            rcon_target = response_to or self.agent_name
+            self.log.error("factorioctl MCP not found")
+            if player_index > 0:
+                send_response(self.rcon, player_index, rcon_target,
+                              "Error: factorioctl MCP not found")
+            return
+
+        new_session = handle_message(
+            message, self.mcp_config, self.system_prompt, self.session_id,
+            self.rcon, player_index, self.telemetry,
+            agent_name=self.agent_name, telemetry_name=self.telemetry_name,
+            response_to=response_to, model=msg.get("model") or self.model,
+            max_turns=self.max_turns,
+        )
+        if new_session:
+            self.session_id = new_session
+            save_session(self.agent_name, self.session_id)
 
 
 def main_multi(args, agent_profiles: list[dict]):
     """Multi-agent mode: one thread per agent, shared watcher."""
+    log = logger.bind(agent="system")
     # Shared RCON (thread-safe)
-    print("Connecting to Factorio RCON...")
+    log.info("Connecting to Factorio RCON...")
     rcon_raw = RCONClient(args.rcon_host, args.rcon_port, args.rcon_password)
     rcon = ThreadSafeRCON(rcon_raw)
-    print("RCON connected!")
+    log.info("RCON connected")
 
     mod_loaded = check_mod_loaded(rcon)
     if mod_loaded:
-        print("claude-interface mod detected!")
+        log.info("claude-interface mod detected")
         # Register group chat + agents first, THEN remove default
         # (unregister must happen after registers so safety check passes)
         register_agent(rcon, "all", label="ALL")
-        print(f"  Registered tab:   all (group chat)")
+        log.info("Registered tab: all (group chat)")
         for agent in agent_profiles:
             label = agent.get("planet", agent["name"]).capitalize()
             register_agent(rcon, agent["name"], label=label)
-            print(f"  Registered agent: {agent['name']} [{label}]")
+            log.info("Registered agent: {} [{}]", agent["name"], label)
         unregister_agent(rcon, "default")
     else:
-        print("WARNING: claude-interface mod not detected.")
+        log.warning("claude-interface mod not detected")
 
     # Create planet surfaces if requested (for fresh worlds)
     if args.setup_surfaces:
         planets = list({a.get("planet", "nauvis") for a in agent_profiles} - {"nauvis"})
         if planets:
-            print("\nSetting up planet surfaces...")
+            log.info("Setting up planet surfaces")
             results = setup_surfaces(rcon, sorted(planets))
             for planet, status in results.items():
-                print(f"  {planet}: {status}")
+                log.info("{}: {}", planet, status)
 
     # Pre-place characters on correct planets (offset to avoid overlapping with player)
-    print("\nPre-placing characters...")
+    log.info("Pre-placing characters")
     for i, agent in enumerate(agent_profiles):
         planet = agent.get("planet", "nauvis")
         result = pre_place_character(rcon, agent["name"], planet, spawn_offset=i)
-        print(f"  {agent['name']} -> {planet}: {result}")
+        log.info("{} -> {}: {}", agent["name"], planet, result)
 
     # Spectator mode: players who connect will be set to spectator (no character body)
     if args.spectator:
         set_spectator_mode(rcon, enabled=True)
-        print("  Spectator mode: enabled (players join as spectators)")
+        log.info("Spectator mode enabled; players join as spectators")
 
     # Telemetry
     telemetry = build_telemetry(args)
@@ -866,7 +1024,7 @@ def main_multi(args, agent_profiles: list[dict]):
     for agent in agent_profiles:
         mcp_config = None
         if mcp_bin:
-            mcp_config = write_mcp_config(
+            mcp_config = build_mcp_servers(
                 mcp_bin, args.rcon_host, args.rcon_port,
                 args.rcon_password, agent_id=agent["name"],
             )
@@ -884,23 +1042,23 @@ def main_multi(args, agent_profiles: list[dict]):
 
     # Banner
     agent_names = ", ".join(a["name"] for a in agent_profiles)
-    print(f"\nClaude-in-Factorio — multi-agent")
-    print(f"  Agents:      {agent_names}")
-    print(f"  RCON:        {args.rcon_host}:{args.rcon_port}")
-    print(f"  Input:       {input_file}")
+    log.info("Factorio companion - multi-agent")
+    log.info("Agents: {}", agent_names)
+    log.info("RCON: {}:{}", args.rcon_host, args.rcon_port)
+    log.info("Input: {}", input_file)
     if mcp_bin:
-        print(f"  MCP server:  {mcp_bin}")
+        log.info("MCP server: {}", mcp_bin)
 
     # Start agent threads with staggered delays to avoid RCON flood
     stagger = args.stagger_delay
-    print(f"\nStarting agents (stagger: {stagger}s)...")
+    log.info("Starting agents (stagger: {}s)", stagger)
     for i, at in enumerate(agents.values()):
         at.start()
-        print(f"  [{_ts()}] {at.agent_name} online")
+        log.info("{} online", at.agent_name)
         if stagger > 0 and i < len(agents) - 1:
             time.sleep(stagger)
 
-    print(f"\nWatching for messages... (Ctrl+C to stop)\n")
+    log.info("Watching for messages... (Ctrl+C to stop)")
 
     try:
         while True:
@@ -916,13 +1074,12 @@ def main_multi(args, agent_profiles: list[dict]):
                 elif target in agents:
                     agents[target].enqueue(msg)
                 else:
-                    print(f"[warn] Message for unknown agent '{target}', dropping")
+                    log.warning("Message for unknown agent '{}', dropping", target)
     except (KeyboardInterrupt, SystemExit):
-        print("\nShutting down...")
+        log.info("Shutting down...")
     finally:
-        _kill_all_subprocesses()
         rcon.close()
-        print("Done.")
+        log.info("Done")
 
 
 def _sync_mod():
@@ -944,15 +1101,15 @@ def _sync_mod():
     # Read version from info.json
     info = json.loads((src / "info.json").read_text())
     ver = info.get("version", "?")
-    print(f"Synced claude-interface v{ver} ({count} files)")
-    print(f"  {src} -> {dst}")
+    logger.info("Synced claude-interface v{} ({} files)", ver, count)
+    logger.info("{} -> {}", src, dst)
 
 
 # ── Main ─────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Thin pipe: Factorio in-game GUI <-> claude CLI",
+        description="Thin pipe: Factorio in-game GUI <-> Claude agent SDK",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--agent", default=None,
@@ -1004,11 +1161,11 @@ def main():
         _sync_mod()
         return
 
-    # Set up run logging (tee to console + file)
+    # Set up run logging (console + human file + structured JSONL)
     log_dir = Path(args.log_dir) if args.log_dir else (_BRIDGE_DIR.parent / "logs")
     log_path = setup_logging(log_dir)
     if log_path:
-        print(f"Logging to {log_path}")
+        logger.info("Logging to {}", log_path)
 
     # Install signal handlers for clean Ctrl+C shutdown
     signal.signal(signal.SIGINT, _shutdown_handler)
@@ -1029,10 +1186,13 @@ def main():
     agent_name = agent["name"]
     system_prompt = agent["system_prompt"]
 
-    # CLI flags override agent profile
-    model = args.model or agent.get("model")
+    # CLI flags override agent profile; default to the fast "haiku" tier
+    # (.env -> glm-5-turbo) to match the multi-agent path so single-agent runs
+    # never fall through to an unintended SDK default model.
+    model = args.model or agent.get("model") or "haiku"
     max_turns = args.max_turns or agent.get("max_turns", 15)
     telemetry_name = agent.get("telemetry_name", agent_name)
+    log = logger.bind(agent=telemetry_name)
 
     # Load persisted session
     session_id = load_session(agent_name)
@@ -1045,36 +1205,36 @@ def main():
     input_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Banner
-    print(f"Claude-in-Factorio — {agent_name}")
-    print(f"  Agent:       {agent_name}")
-    print(f"  RCON:        {args.rcon_host}:{args.rcon_port}")
-    print(f"  Input:       {input_file}")
+    log.info("Factorio companion - {}", agent_name)
+    log.info("Agent: {}", agent_name)
+    log.info("RCON: {}:{}", args.rcon_host, args.rcon_port)
+    log.info("Input: {}", input_file)
     if session_id:
-        print(f"  Session:     {session_id[:12]}... (resumed)")
+        log.info("Session: {}... (resumed)", session_id[:12])
     else:
-        print(f"  Session:     (new)")
+        log.info("Session: (new)")
     if model:
-        print(f"  Model:       {model}")
+        log.info("Model: {}", model)
     if mcp_bin:
-        print(f"  MCP server:  {mcp_bin}")
+        log.info("MCP server: {}", mcp_bin)
     else:
-        print("  MCP server:  not found (chat-only)")
+        log.warning("MCP server not found (chat-only)")
 
     # RCON
-    print("\nConnecting to Factorio RCON...")
+    log.info("Connecting to Factorio RCON...")
     rcon = RCONClient(args.rcon_host, args.rcon_port, args.rcon_password)
-    print("RCON connected!")
+    log.info("RCON connected")
     if check_mod_loaded(rcon):
-        print("claude-interface mod detected!")
+        log.info("claude-interface mod detected")
         register_agent(rcon, agent_name)
-        print(f"  Registered agent: {agent_name}")
+        log.info("Registered agent: {}", agent_name)
     else:
-        print("WARNING: claude-interface mod not detected.")
+        log.warning("claude-interface mod not detected")
 
     # Pre-place character on correct planet
     planet = agent.get("planet", "nauvis")
     result = pre_place_character(rcon, agent_name, planet, spawn_offset=0)
-    print(f"  Character:   {agent_name} -> {planet}: {result}")
+    log.info("Character: {} -> {}: {}", agent_name, planet, result)
 
     # Telemetry
     telemetry = build_telemetry(args)
@@ -1082,7 +1242,7 @@ def main():
     # MCP config
     mcp_config = None
     if mcp_bin:
-        mcp_config = write_mcp_config(
+        mcp_config = build_mcp_servers(
             mcp_bin, args.rcon_host, args.rcon_port,
             args.rcon_password, agent_id=agent_name,
         )
@@ -1090,7 +1250,7 @@ def main():
     # Watcher
     watcher = InputWatcher(input_file)
 
-    print(f"\nWatching for messages... (Ctrl+C to stop)\n")
+    log.info("Watching for messages... (Ctrl+C to stop)")
 
     try:
         while True:
@@ -1105,16 +1265,17 @@ def main():
                 player_name = msg.get("player_name", "Player")
                 message = msg["message"]
 
-                print(f"[{player_name} -> {agent_name}] {message}")
+                log.info("{} -> {}: {}", player_name, agent_name, message)
                 emit_chat(telemetry, "player", message, agent=telemetry_name)
 
                 if player_index > 0:
                     try:
                         set_status(rcon, player_index, "[color=1,0.8,0.2]Thinking...[/color]")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug("status update failed: {}", e)
 
                 if not mcp_config:
+                    log.error("factorioctl MCP not found")
                     if player_index > 0:
                         send_response(rcon, player_index, agent_name, "Error: factorioctl MCP not found")
                     continue
@@ -1130,11 +1291,10 @@ def main():
                     save_session(agent_name, session_id)
 
     except (KeyboardInterrupt, SystemExit):
-        print("\nShutting down...")
+        log.info("Shutting down...")
     finally:
-        _kill_all_subprocesses()
         rcon.close()
-        print("Done.")
+        log.info("Done")
 
 
 if __name__ == "__main__":

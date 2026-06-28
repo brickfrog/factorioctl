@@ -180,6 +180,103 @@ error_tips:
         )
         self.assertEqual(journal.load_events("doug")[-1]["text"], "Placed the first drill")
 
+    def test_finalize_reply_journals_meaningful_anomaly_discovery(self):
+        import pipe
+
+        finalized = pipe._finalize_reply(
+            """[color=1,0.6,0.2]CLASSIFICATION:[/color] Reviewed.
+
+[color=0.6,0.8,1]ACTIONS TAKEN:[/color]
+- inspected placement
+
+[color=1,0.4,0.4]ANOMALY:[/color] belt route failed across water
+
+[color=0.4,0.6,0.4]FILED:[/color] recorded
+""",
+            "doug",
+        )
+
+        self.assertIn("CLASSIFICATION", finalized)
+        events = journal.load_events("doug")
+        self.assertEqual(events[-1]["kind"], "discovery")
+        self.assertEqual(events[-1]["text"], "belt route failed across water")
+
+    def test_tool_error_detection_flags_factorio_failures(self):
+        import pipe
+
+        failures = [
+            '{"error":"cannot place stone furnace"}',
+            '{"success":false,"message":"blocked"}',
+            '[{"type":"text","text":"Error: invalid type: map, expected a sequence"}]',
+            "Error: entity not found",
+            "Cannot place entity at target",
+            "Could not route belt to target",
+            "not in inventory",
+            "no power",
+            "route failed",
+        ]
+
+        for text in failures:
+            with self.subTest(text=text):
+                self.assertTrue(pipe._looks_like_tool_error(text))
+
+        self.assertFalse(pipe._looks_like_tool_error('{"success":true}'))
+        self.assertFalse(pipe._looks_like_tool_error("nominal scan complete"))
+
+    def test_run_agent_journals_sdk_tool_result_failures(self):
+        # The whole point of the SDK migration: tool failures arrive as
+        # ToolResultBlocks inside UserMessage.content (list) AND, from some
+        # GLM adapters, as a bare UserMessage.content string. Both must be
+        # journaled; successes and plain narration must not.
+        import asyncio
+
+        import pipe
+        from claude_agent_sdk import ToolResultBlock, UserMessage
+
+        messages = [
+            UserMessage(content=[ToolResultBlock(
+                tool_use_id="t1", content="ok scan complete", is_error=False)]),
+            UserMessage(content=[ToolResultBlock(
+                tool_use_id="t2", content=[{"type": "text", "text": "boom"}], is_error=True)]),
+            UserMessage(content=[ToolResultBlock(
+                tool_use_id="t3", content="Error: cannot place stone furnace", is_error=False)]),
+            UserMessage(content="Error: invalid type: map, expected a sequence"),
+            UserMessage(content="just narrating, nothing wrong here"),
+        ]
+
+        def scripted_query(*, prompt, options):
+            async def gen():
+                for m in messages:
+                    yield m
+            return gen()
+
+        class StubRCON:
+            def execute(self, _cmd):
+                return ""
+
+        with mock.patch("pipe.query", scripted_query):
+            asyncio.run(pipe._run_agent(
+                "go", object(), "doug", None, "doug",
+                StubRCON(), 0, pipe.logger.bind(agent="doug"),
+            ))
+
+        texts = [event["text"] for event in journal.load_events("doug")]
+        # is_error=True, error-text list-block, and string-wrapped error -> 3 failures
+        self.assertEqual(len(texts), 3)
+        self.assertTrue(any("boom" in t for t in texts))
+        self.assertTrue(any("cannot place stone furnace" in t for t in texts))
+        self.assertTrue(any("invalid type: map" in t for t in texts))
+        # success result and benign narration must NOT be journaled
+        self.assertFalse(any("ok scan complete" in t for t in texts))
+        self.assertFalse(any("narrating" in t for t in texts))
+
+    def test_anomaly_filter_ignores_nominal_variants(self):
+        import pipe
+
+        for text in ("None", "nominal", "no anomalies found", "none detected"):
+            with self.subTest(text=text):
+                self.assertFalse(pipe._is_meaningful_anomaly(text))
+
     def test_autonomy_tick_injects_memory_and_periodic_reflection_nudge(self):
         import ledger
         import pipe

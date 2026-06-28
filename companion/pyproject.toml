@@ -1,0 +1,14 @@
+[project]
+name = "factorio-companion"
+version = "0.1.0"
+description = "Autonomous Factorio companion bridge (RCON <-> claude CLI agent loop)"
+requires-python = ">=3.10"
+dependencies = [
+    "claude-agent-sdk>=0.2.110",
+    "loguru>=0.7.2",
+]
+
+# Flat-script application (bridge/*.py imported by path), not an installable
+# package — uv manages the venv + deps, nothing to build.
+[tool.uv]
+package = false
