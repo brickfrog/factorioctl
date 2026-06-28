@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
         Commands::Server(cmd) => cli::server::execute(cmd).await,
         Commands::Get(cmd) => cli::get::execute(cmd, &conn).await,
         Commands::Character(cmd) => cli::character::execute(cmd, &conn).await,
+        Commands::Situation(cmd) => cli::situation::execute(cmd, &conn).await,
         Commands::WalkTo(cmd) => cli::walk_to::execute(cmd, &conn).await,
         Commands::Gather(cmd) => cli::gather::execute(cmd, &conn).await,
         Commands::Build(cmd) => cli::build::execute(cmd, &conn).await,

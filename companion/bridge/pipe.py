@@ -567,6 +567,8 @@ AUTONOMY_PROMPT = (
     "continuity: continue your current committed objective and plan, then "
     "execute the next incomplete step with your tools. Do not re-scan areas "
     "you already inspected, and do not restart the plan. Finish before you "
+    "Call situation_report once to orient instead of render_map + "
+    "get_inventory + get_resources. "
     "switch: choose a new objective only when the current one is genuinely "
     "finished or impossible. Actually do things, don't just describe them. "
     "Narrate as you go with broadcast_thought so the stream stays lively. "
