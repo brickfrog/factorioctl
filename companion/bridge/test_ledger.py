@@ -111,16 +111,19 @@ progress: Started the science plan
         self.assertIn("1. Find break", rendered)
         self.assertIn("Reached the blackout area", rendered)
 
-    def test_autonomy_prompt_continuity_and_ledger_protocol(self):
-        pipe = importlib.import_module("pipe")
+    def test_autonomy_prompts_keep_continuity_and_ledger_protocol(self):
+        planner = importlib.import_module("planner")
 
-        self.assertNotIn("check your current situation", pipe.AUTONOMY_PROMPT)
-        self.assertIn("continuity", pipe.AUTONOMY_PROMPT.lower())
-        self.assertIn("<ledger>", pipe.AUTONOMY_PROMPT)
-        # situation_report guidance present, and it did not splice through the
-        # existing "Finish before you switch" sentence (the u42 regression).
-        self.assertIn("situation_report", pipe.AUTONOMY_PROMPT)
-        self.assertIn("Finish before you switch", pipe.AUTONOMY_PROMPT)
+        for prompt in (planner.PLANNER_PROMPT, planner.EXECUTION_PROMPT):
+            self.assertNotIn("check your current situation", prompt)
+            self.assertIn("continuity", prompt.lower())
+            self.assertIn("<ledger>", prompt)
+
+        # situation_report guidance remains on the deliberative planner path,
+        # while execution explicitly avoids redundant scans and re-planning.
+        self.assertIn("situation_report", planner.PLANNER_PROMPT)
+        self.assertIn("Finish before you switch", planner.PLANNER_PROMPT)
+        self.assertIn("do not re-plan", planner.EXECUTION_PROMPT.lower())
 
     def test_load_normalizes_null_fields_and_apply_does_not_raise(self):
         # A ledger persisted with null lists must not crash the next update.
@@ -193,11 +196,14 @@ progress: Started the science plan
         thread = pipe.AgentThread.__new__(pipe.AgentThread)
         thread.agent_name = "doug"
         thread.rcon = StubRCON()
+        thread._exec_ticks_since_plan = 0
+        thread._planner_interval = 5
+        thread._planner_model = None
 
         prompt = thread._compose_autonomy_prompt()
 
         self.assertIn("Build a smelting column", prompt)
-        self.assertIn(pipe.AUTONOMY_PROMPT, prompt)
+        self.assertIn("execute the NEXT incomplete plan step", prompt)
 
 
 if __name__ == "__main__":
