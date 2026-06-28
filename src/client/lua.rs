@@ -1917,26 +1917,21 @@ end
     pub fn register_chat_handler() -> String {
         r#"
 if not storage.factorioctl_chat then
-    storage.factorioctl_chat = { messages = {}, handler_registered = false }
+    storage.factorioctl_chat = { messages = {} }
 end
-if not storage.factorioctl_chat.handler_registered then
-    script.on_event(defines.events.on_console_chat, function(event)
-        local player_name = "console"
-        if event.player_index then
-            local p = game.get_player(event.player_index)
-            if p then player_name = p.name end
-        end
-        table.insert(storage.factorioctl_chat.messages, {
-            player = player_name,
-            message = event.message,
-            tick = event.tick
-        })
-    end)
-    storage.factorioctl_chat.handler_registered = true
-    rcon.print("registered")
-else
-    rcon.print("already_registered")
-end
+script.on_event(defines.events.on_console_chat, function(event)
+    local player_name = "console"
+    if event.player_index then
+        local p = game.get_player(event.player_index)
+        if p then player_name = p.name end
+    end
+    table.insert(storage.factorioctl_chat.messages, {
+        player = player_name,
+        message = event.message,
+        tick = event.tick
+    })
+end)
+rcon.print("registered")
 "#
         .trim()
         .to_string()
@@ -3038,5 +3033,24 @@ rcon.print(helpers.table_to_json(result))
         )
         .trim()
         .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LuaCommand;
+
+    #[test]
+    fn register_chat_handler_is_unconditional_and_preserves_buffer() {
+        let lua = LuaCommand::register_chat_handler();
+
+        assert!(lua.contains("script.on_event(defines.events.on_console_chat"));
+        assert!(!lua.contains("handler_registered"));
+        assert!(lua.contains("storage.factorioctl_chat"));
+        assert!(lua.contains("messages = {}"));
+        assert!(
+            lua.lines().all(|line| !line.trim_start().contains(" -- ")),
+            "Lua command must not contain inline -- comments"
+        );
     }
 }

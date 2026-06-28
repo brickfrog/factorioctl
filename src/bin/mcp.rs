@@ -714,7 +714,9 @@ impl FactorioMcp {
 
         // First ensure the chat handler is registered
         let register_lua = factorioctl::client::lua::LuaCommand::register_chat_handler();
-        let _ = client.execute_lua(&register_lua).await;
+        if let Err(err) = client.execute_lua(&register_lua).await {
+            eprintln!("Failed to register chat handler: {}", err);
+        }
 
         // Then fetch and clear messages
         let fetch_lua = factorioctl::client::lua::LuaCommand::get_and_clear_chat_messages();
