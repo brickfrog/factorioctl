@@ -200,13 +200,13 @@ pub async fn execute(cmd: BlueprintCommand, conn: &ResolvedConnectionArgs) -> Re
         // --- Native Factorio Blueprint Commands ---
         BlueprintSubcommand::String { area } => {
             let area = parse_area(&area)?;
-            let result = client.create_native_blueprint(area).await?;
+            let result = client.create_native_blueprint(&conn.agent_id, area).await?;
             Output::new(conn.output).print(&result)?;
         }
 
         BlueprintSubcommand::Save { name, area } => {
             let area = parse_area(&area)?;
-            let result = client.save_blueprint(&name, area).await?;
+            let result = client.save_blueprint(&conn.agent_id, &name, area).await?;
             Output::new(conn.output).print(&result)?;
         }
 
@@ -237,7 +237,7 @@ pub async fn execute(cmd: BlueprintCommand, conn: &ResolvedConnectionArgs) -> Re
             let position = parse_position(&at)?;
             let dir = Direction::from_name(&direction).unwrap_or(Direction::North);
             let result = client
-                .place_blueprint(&name, position, dir.to_factorio())
+                .place_blueprint(&conn.agent_id, &name, position, dir.to_factorio())
                 .await?;
             Output::new(conn.output).print(&result)?;
         }
@@ -250,7 +250,7 @@ pub async fn execute(cmd: BlueprintCommand, conn: &ResolvedConnectionArgs) -> Re
             let position = parse_position(&at)?;
             let dir = Direction::from_name(&direction).unwrap_or(Direction::North);
             let result = client
-                .import_blueprint(&string, position, dir.to_factorio())
+                .import_blueprint(&conn.agent_id, &string, position, dir.to_factorio())
                 .await?;
             Output::new(conn.output).print(&result)?;
         }

@@ -1700,17 +1700,14 @@ end
     // --- Native Blueprint Commands ---
 
     /// Create a native Factorio blueprint string from entities in an area
-    pub fn create_native_blueprint(area: Area) -> String {
+    pub fn create_native_blueprint(agent_id: &AgentId, area: Area) -> String {
+        let resolve = Self::resolve_required(agent_id);
         format!(
             r#"
-local surface = game.surfaces[1]
-local player = game.get_player(1)
-if not player then
-    rcon.print('{{"error": "No player"}}')
-    return
-end
+{}
 
-local inv = player.get_main_inventory()
+local surface = c.surface
+local inv = c.get_main_inventory()
 if not inv then
     rcon.print('{{"error": "No inventory"}}')
     return
@@ -1739,6 +1736,7 @@ else
     }}))
 end
 "#,
+            resolve,
             Self::blueprint_scratch_stack_lua(),
             area.left_top.x,
             area.left_top.y,
@@ -1750,18 +1748,15 @@ end
     }
 
     /// Save a blueprint to storage with a name
-    pub fn save_blueprint(name: &str, area: Area) -> String {
+    pub fn save_blueprint(agent_id: &AgentId, name: &str, area: Area) -> String {
+        let resolve = Self::resolve_required(agent_id);
         let name = Self::lua_escape(name);
         format!(
             r#"
-local surface = game.surfaces[1]
-local player = game.get_player(1)
-if not player then
-    rcon.print('{{"success": false, "error": "No player"}}')
-    return
-end
+{}
 
-local inv = player.get_main_inventory()
+local surface = c.surface
+local inv = c.get_main_inventory()
 if not inv then
     rcon.print('{{"success": false, "error": "No inventory"}}')
     return
@@ -1790,6 +1785,7 @@ else
     rcon.print('{{"success": true, "entity_count": ' .. count .. '}}')
 end
 "#,
+            resolve,
             Self::blueprint_scratch_stack_lua(),
             area.left_top.x,
             area.left_top.y,
@@ -1841,10 +1837,18 @@ end
     }
 
     /// Place a saved blueprint at a position
-    pub fn place_blueprint(name: &str, position: Position, direction: u8) -> String {
+    pub fn place_blueprint(
+        agent_id: &AgentId,
+        name: &str,
+        position: Position,
+        direction: u8,
+    ) -> String {
+        let resolve = Self::resolve_required(agent_id);
         let name = Self::lua_escape(name);
         format!(
             r#"
+{}
+
 storage.blueprints = storage.blueprints or {{}}
 local data = storage.blueprints["{}"]
 if not data then
@@ -1852,13 +1856,7 @@ if not data then
     return
 end
 
-local player = game.get_player(1)
-if not player then
-    rcon.print('{{"success": false, "error": "No player"}}')
-    return
-end
-
-local inv = player.get_main_inventory()
+local inv = c.get_main_inventory()
 if not inv then
     rcon.print('{{"success": false, "error": "No inventory"}}')
     return
@@ -1868,7 +1866,7 @@ end
 slot.import_stack(data.string)
 
 local ghosts = slot.build_blueprint{{
-    surface = game.surfaces[1],
+    surface = c.surface,
     force = "player",
     position = {{ x = {}, y = {} }},
     direction = {},
@@ -1887,6 +1885,7 @@ rcon.print(helpers.table_to_json({{
     ghosts_created = #ghosts
 }}))
 "#,
+            resolve,
             name,
             Self::blueprint_scratch_stack_lua(),
             position.x,
@@ -1898,17 +1897,19 @@ rcon.print(helpers.table_to_json({{
     }
 
     /// Import and place a blueprint from a string
-    pub fn import_blueprint(bp_string: &str, position: Position, direction: u8) -> String {
+    pub fn import_blueprint(
+        agent_id: &AgentId,
+        bp_string: &str,
+        position: Position,
+        direction: u8,
+    ) -> String {
+        let resolve = Self::resolve_required(agent_id);
         let bp_string = Self::lua_escape(bp_string);
         format!(
             r#"
-local player = game.get_player(1)
-if not player then
-    rcon.print('{{"success": false, "error": "No player"}}')
-    return
-end
+{}
 
-local inv = player.get_main_inventory()
+local inv = c.get_main_inventory()
 if not inv then
     rcon.print('{{"success": false, "error": "No inventory"}}')
     return
@@ -1924,7 +1925,7 @@ if not ok then
 end
 
 local ghosts = slot.build_blueprint{{
-    surface = game.surfaces[1],
+    surface = c.surface,
     force = "player",
     position = {{ x = {}, y = {} }},
     direction = {},
@@ -1943,6 +1944,7 @@ rcon.print(helpers.table_to_json({{
     ghosts_created = #ghosts
 }}))
 "#,
+            resolve,
             Self::blueprint_scratch_stack_lua(),
             bp_string,
             position.x,
@@ -2000,7 +2002,7 @@ rcon.print("registered")
     pub fn get_and_clear_chat_messages() -> String {
         r#"
 if not storage.factorioctl_chat then
-    storage.factorioctl_chat = { messages = {}, handler_registered = false }
+    storage.factorioctl_chat = { messages = {} }
 end
 local msgs = storage.factorioctl_chat.messages
 storage.factorioctl_chat.messages = {}
