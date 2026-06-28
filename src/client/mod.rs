@@ -8,9 +8,9 @@ use anyhow::{bail, Result};
 
 use crate::world::{
     Area, BeltContentsResult, BeltLaneContentsResult, BeltLaneSummary, BuildResult,
-    CharacterStatus, CollisionMap, CraftResult, Direction, Entity, GatherResult, GridPos,
-    Inventory, InventoryItem, LaneContents, MineResult, PlacementSpec, Position, Prototype, Recipe,
-    RecipeSummary, ResourcePatch, Surface, Tick, Tile, TilePos, WalkResult,
+    CharacterStatus, CollisionMap, CraftResult, Direction, Entity, EntityProduction, GatherResult,
+    GridPos, Inventory, InventoryItem, LaneContents, MineResult, PlacementSpec, Position,
+    Prototype, Recipe, RecipeSummary, ResourcePatch, Surface, Tick, Tile, TilePos, WalkResult,
 };
 use lua::LuaCommand;
 use rcon::RconClient;
@@ -184,6 +184,14 @@ impl FactorioClient {
         let response = self.execute_lua(&lua).await?;
         let result: serde_json::Value = serde_json::from_str(&response)?;
         Ok(result)
+    }
+
+    /// Verify production status for producing entities in an area
+    pub async fn verify_production(&mut self, area: Area) -> Result<Vec<EntityProduction>> {
+        let lua = LuaCommand::verify_production(area);
+        let response = self.execute_lua(&lua).await?;
+        let entities: Vec<EntityProduction> = serde_json::from_str(&response)?;
+        Ok(entities)
     }
 
     // --- Resource Queries ---

@@ -165,6 +165,44 @@ rcon.print(helpers.table_to_json(result))
         .to_string()
     }
 
+    /// Verify production status for producing entities in an area
+    pub fn verify_production(area: Area) -> String {
+        format!(
+            r#"
+local surface = game.surfaces[1]
+local force = game.forces.player
+local area = {{{{{}, {}}}, {{{}, {}}}}}
+local status_names = {{}}
+for name, value in pairs(defines.entity_status) do
+    status_names[value] = name
+end
+local result = {{}}
+local entities = surface.find_entities_filtered{{area = area, force = force}}
+for _, ent in pairs(entities) do
+    local status_ok, status_value = pcall(function() return ent.status end)
+    if status_ok and status_value ~= nil then
+        local products_finished = nil
+        local products_ok, products_value = pcall(function() return ent.products_finished end)
+        if products_ok then
+            products_finished = products_value
+        end
+        table.insert(result, {{
+            name = ent.name,
+            position = {{ x = ent.position.x, y = ent.position.y }},
+            status = status_names[status_value] or tostring(status_value),
+            products_finished = products_finished,
+            working = status_value == defines.entity_status.working
+        }})
+    end
+end
+rcon.print(helpers.table_to_json(result))
+"#,
+            area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y
+        )
+        .trim()
+        .to_string()
+    }
+
     /// Get a specific entity by unit number
     pub fn get_entity(unit_number: u32) -> String {
         let lookup = Self::entity_lookup(unit_number);
