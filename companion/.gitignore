@@ -17,6 +17,7 @@ bridge/.mcp-config*.json
 # Session persistence (runtime)
 bridge/.sessions.json
 bridge/.session-*.json
+bridge/.ledger-*.json
 
 # factorioctl engine memory (runtime, written in cwd)
 .agent_memory.json
