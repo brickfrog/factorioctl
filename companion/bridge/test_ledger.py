@@ -117,6 +117,10 @@ progress: Started the science plan
         self.assertNotIn("check your current situation", pipe.AUTONOMY_PROMPT)
         self.assertIn("continuity", pipe.AUTONOMY_PROMPT.lower())
         self.assertIn("<ledger>", pipe.AUTONOMY_PROMPT)
+        # situation_report guidance present, and it did not splice through the
+        # existing "Finish before you switch" sentence (the u42 regression).
+        self.assertIn("situation_report", pipe.AUTONOMY_PROMPT)
+        self.assertIn("Finish before you switch", pipe.AUTONOMY_PROMPT)
 
     def test_load_normalizes_null_fields_and_apply_does_not_raise(self):
         # A ledger persisted with null lists must not crash the next update.

@@ -28,6 +28,7 @@ pub mod route;
 pub mod say;
 pub mod server;
 pub mod set_recipe;
+pub mod situation;
 pub mod tick;
 pub mod walk_to;
 
@@ -145,6 +146,9 @@ pub enum Commands {
 
     /// Character control (init, teleport, walk, status, inventory)
     Character(character::CharacterCommand),
+
+    /// Compact situational snapshot for orientation
+    Situation(situation::SituationCommand),
 
     /// Walk to a position (smooth navigation)
     WalkTo(walk_to::WalkToCommand),

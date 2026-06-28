@@ -19,8 +19,8 @@ use factorioctl::analyze::{
 use factorioctl::client::{lua::LuaCommand, AgentId, FactorioClient};
 use factorioctl::memory::{AgentMemory, BeltRouting, ProtectedResource, Zone, ZoneType};
 use factorioctl::world::{
-    find_belt_route_with_options, Area, BeltKind, Direction, GridPos, Position, RoutingOptions,
-    TilePos, UndergroundConfig,
+    build_situation_report, find_belt_route_with_options, Area, BeltKind, Direction, GridPos,
+    Position, RoutingOptions, TilePos, UndergroundConfig,
 };
 
 /// Connection configuration loaded from environment or config
@@ -167,6 +167,13 @@ pub struct GetResourcesParams {
     pub radius: u32,
     /// Optional: filter by resource type (e.g., 'iron-ore')
     pub resource_type: Option<String>,
+}
+
+/// Parameters for situation_report tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SituationReportParams {
+    /// Radius around the character to scan
+    pub radius: Option<u32>,
 }
 
 /// Parameters for find_nearest_resource tool
@@ -1296,6 +1303,68 @@ impl FactorioMcp {
             }
             Err(e) => format!("Error: {}", e),
         };
+        self.with_player_messages(result).await
+    }
+
+    /// Get a compact one-call situational snapshot for orientation.
+    #[tool(
+        description = "Compact one-call situational snapshot with position, health, walking, tick, inventory, nearby entity counts, and resource patches. Use this to orient instead of separate render_map + get_inventory + get_resources scans."
+    )]
+    async fn situation_report(
+        &self,
+        Parameters(params): Parameters<SituationReportParams>,
+    ) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let radius = params.radius.unwrap_or(32);
+        let status = match client.character_status().await {
+            Ok(status) => status,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+        let position = match status.position {
+            Some(position) => position,
+            None => match client.get_character_position().await {
+                Ok(position) => position,
+                Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+            },
+        };
+        let r = radius as f64;
+        let area = Area {
+            left_top: Position::new(position.x - r, position.y - r),
+            right_bottom: Position::new(position.x + r, position.y + r),
+        };
+        let inventory = match client.character_inventory().await {
+            Ok(inventory) => inventory,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+        let entities = match client.find_entities(area, None, None).await {
+            Ok(entities) => entities,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+        let resources = match client.find_resources(area, None).await {
+            Ok(resources) => resources,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+        let tick = match client.get_tick().await {
+            Ok(tick) => tick,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let report = build_situation_report(
+            position,
+            status.health,
+            status.walking,
+            tick.tick,
+            inventory.items,
+            entities,
+            resources,
+            radius,
+        );
+        let result =
+            serde_json::to_string_pretty(&report).unwrap_or_else(|e| format!("Error: {}", e));
         self.with_player_messages(result).await
     }
 

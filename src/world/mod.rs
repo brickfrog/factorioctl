@@ -8,6 +8,7 @@ mod prototype;
 mod recipe;
 mod resource;
 mod results;
+mod situation;
 mod surface;
 mod tile;
 
@@ -19,6 +20,7 @@ pub use prototype::*;
 pub use recipe::*;
 pub use resource::*;
 pub use results::*;
+pub use situation::*;
 pub use surface::*;
 pub use tile::*;
 
