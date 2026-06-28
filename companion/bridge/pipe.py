@@ -101,8 +101,11 @@ def setup_logging(log_dir: Path) -> Path | None:
         return None
 
 
-from ledger import (apply_ledger_update, load_ledger, render_ledger,
-                    strip_ledger_trailer)
+from ledger import (apply_ledger_update, load_ledger, parse_ledger_trailer,
+                    render_ledger, strip_ledger_trailer)
+from journal import (append_event, apply_reflection_update, count_events,
+                     load_events, load_reflection, render_memory,
+                     should_reflect, strip_reflection_trailer)
 from planner import build_autonomy_prompt, choose_autonomy_mode
 from rcon import RCONClient, ThreadSafeRCON, lua_long_string
 from paths import find_script_output, find_factorioctl_mcp
@@ -334,8 +337,13 @@ def _finalize_reply(reply: str, agent_name: str) -> str:
     human-visible reply, and fall back to a placeholder if the reply was ONLY a
     ledger block (so the bridge never logs/sends a blank message). This is the
     tested seam for the ledger persist + empty-reply guard."""
+    ledger_update = parse_ledger_trailer(reply)
     apply_ledger_update(agent_name, reply)
+    apply_reflection_update(agent_name, reply)
+    if ledger_update and ledger_update.get("progress"):
+        append_event(agent_name, "progress", ledger_update["progress"])
     reply = strip_ledger_trailer(reply)
+    reply = strip_reflection_trailer(reply)
     if not reply.strip():
         return "(action complete)"
     return reply
@@ -470,6 +478,7 @@ def handle_message(
         stderr = proc.stderr.read()
         if stderr and not text_parts:
             error_msg = f"Error: {stderr[:200]}"
+            append_event(agent_name, "failure", stderr.strip()[:200])
             print(f"[Error] {stderr.strip()}")
             emit_error(telemetry, error_msg, agent=tname)
             if player_index > 0:
@@ -586,6 +595,7 @@ class AgentThread:
         self._planner_interval = int(
             agent.get("planner_interval", planner_interval)
         )
+        self._reflect_interval = int(agent.get("reflect_interval", 16))
         self._planner_model = agent.get("planner_model")
         # When True, autonomy ticks only fire while a human is connected to the
         # server, so the agent waits to "do its own thing" until you join (and
@@ -642,6 +652,12 @@ class AgentThread:
     def _autonomy_tick(self) -> dict:
         """Choose plan/execute mode, update cadence state, and build the message."""
         ledger = load_ledger(self.agent_name)
+        memory = render_memory(
+            load_events(self.agent_name, 5),
+            load_reflection(self.agent_name),
+        )
+        ledger_text = render_ledger(ledger)
+        continuity_parts = [part for part in (memory, ledger_text) if part]
         mode = choose_autonomy_mode(
             ledger, self._exec_ticks_since_plan, self._planner_interval,
         )
@@ -650,10 +666,26 @@ class AgentThread:
         else:
             self._exec_ticks_since_plan += 1
 
+        message = build_autonomy_prompt(
+            mode, "\n\n".join(continuity_parts), self._live_state_line(),
+        )
+        if should_reflect(
+            count_events(self.agent_name), getattr(self, "_reflect_interval", 16),
+        ):
+            message = "\n\n".join([
+                message,
+                "This is a reflection turn: emit a hidden <reflection> block "
+                "summarizing durable lessons in exactly this format:\n"
+                "<reflection>\n"
+                "structures:\n"
+                "- what is built where\n"
+                "error_tips:\n"
+                "- mistake to avoid next time\n"
+                "</reflection>",
+            ])
+
         tick = {
-            "message": build_autonomy_prompt(
-                mode, render_ledger(ledger), self._live_state_line(),
-            ),
+            "message": message,
             "player_index": 0,
             "player_name": "autonomy",
             "autonomy": True,
