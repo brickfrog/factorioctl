@@ -107,6 +107,8 @@ from journal import (append_event, apply_reflection_update, count_events,
                      load_events, load_reflection, render_memory,
                      should_reflect, strip_reflection_trailer)
 from planner import build_autonomy_prompt, choose_autonomy_mode
+from skills import (apply_skill_update, load_library, render_skills,
+                    strip_skill_trailer)
 from rcon import RCONClient, ThreadSafeRCON, lua_long_string
 from paths import find_script_output, find_factorioctl_mcp
 from transport import (InputWatcher, send_response, send_tool_status, set_status,
@@ -340,10 +342,12 @@ def _finalize_reply(reply: str, agent_name: str) -> str:
     ledger_update = parse_ledger_trailer(reply)
     apply_ledger_update(agent_name, reply)
     apply_reflection_update(agent_name, reply)
+    apply_skill_update(reply)
     if ledger_update and ledger_update.get("progress"):
         append_event(agent_name, "progress", ledger_update["progress"])
     reply = strip_ledger_trailer(reply)
     reply = strip_reflection_trailer(reply)
+    reply = strip_skill_trailer(reply)
     if not reply.strip():
         return "(action complete)"
     return reply
@@ -657,7 +661,7 @@ class AgentThread:
             load_reflection(self.agent_name),
         )
         ledger_text = render_ledger(ledger)
-        continuity_parts = [part for part in (memory, ledger_text) if part]
+        skill_text = render_skills(load_library())
         mode = choose_autonomy_mode(
             ledger, self._exec_ticks_since_plan, self._planner_interval,
         )
@@ -665,6 +669,25 @@ class AgentThread:
             self._exec_ticks_since_plan = 0
         else:
             self._exec_ticks_since_plan += 1
+        # The available-skills list is injected every tick (compact); the full
+        # save-a-new-skill format example is shown only on the deliberative
+        # planner tick so cheap execution ticks stay lean.
+        parts = [memory, ledger_text, skill_text]
+        if mode == "plan":
+            parts.append(
+                "Prefer reusing an existing skill over re-deriving a build; when "
+                "you perfect a new reusable build, save it as a <skill> block.\n"
+                "<skill>\n"
+                "name: lay_smelting_line\n"
+                "params: ore_belt_pos, furnace_count\n"
+                "steps:\n"
+                "- place N stone furnaces in a column\n"
+                "- route the ore belt past them and add input inserters\n"
+                "- add output inserters to a plates belt\n"
+                "outcome: iron/copper plates on the output belt\n"
+                "</skill>"
+            )
+        continuity_parts = [part for part in parts if part]
 
         message = build_autonomy_prompt(
             mode, "\n\n".join(continuity_parts), self._live_state_line(),
