@@ -484,10 +484,12 @@ local function process_walk_targets()
         local c = storage.characters[agent_id]
         if not (c and c.valid) then
             storage.walk_targets[agent_id] = nil
+            if storage.walk_state then storage.walk_state[agent_id] = nil end
             goto continue
         end
         if tgt.expires_tick and game.tick >= tgt.expires_tick then
             storage.walk_targets[agent_id] = nil
+            c.walking_state = {walking = false}
             goto continue
         end
 
@@ -511,13 +513,11 @@ local function process_walk_targets()
                 end
             end
 
-            local dir = 0
-            if math.abs(dx) > math.abs(dy) then
-                dir = dx > 0 and defines.direction.east or defines.direction.west
-            else
-                dir = dy > 0 and defines.direction.south or defines.direction.north
-            end
-            c.walking_state = {walking = true, direction = dir}
+            -- Teleport is the ONLY mover. Never set walking_state.walking = true:
+            -- the engine then physically walks the orphan character cardinally on
+            -- top of the teleport, and on expiry/stuck clears it keeps walking for
+            -- hundreds of tiles (the "positional discontinuity" runaway).
+            c.walking_state = {walking = false}
 
             local moved = math.sqrt((c.position.x - last_x) * (c.position.x - last_x) + (c.position.y - last_y) * (c.position.y - last_y))
             if moved < 0.001 then
@@ -529,6 +529,7 @@ local function process_walk_targets()
             tgt.last_y = c.position.y
             if tgt.stuck_ticks >= 120 then
                 storage.walk_targets[agent_id] = nil
+                c.walking_state = {walking = false}
             end
         end
 
@@ -735,12 +736,20 @@ remote.add_interface("claude_interface", {
     -- Set target position for deterministic agent step-walking (processed in on_tick)
     set_walk_target = function(agent_id, x, y)
         if not storage.walk_targets then storage.walk_targets = {} end
+        -- Drop any durable directional walk_state so it can't co-drive the
+        -- character alongside the teleport stepper (audit F1/F2).
+        if storage.walk_state then storage.walk_state[agent_id] = nil end
         storage.walk_targets[agent_id] = {x = x, y = y, stuck_ticks = 0, expires_tick = game.tick + 7200}
     end,
 
-    -- Clear target position for deterministic agent step-walking
+    -- Clear target position AND any leftover walk state for an agent. Must reset
+    -- walking_state too, or a stale {walking=true} keeps the orphan character
+    -- engine-walking with no target (audit F2 trapdoor).
     clear_walk_target = function(agent_id)
         if storage.walk_targets then storage.walk_targets[agent_id] = nil end
+        if storage.walk_state then storage.walk_state[agent_id] = nil end
+        local c = storage.characters and storage.characters[agent_id]
+        if c and c.valid then c.walking_state = {walking = false} end
     end,
 
     -- Report whether an agent has an active deterministic walk target
