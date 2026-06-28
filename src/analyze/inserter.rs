@@ -1,16 +1,14 @@
 //! Inserter pickup/dropoff analysis
 
-use std::collections::HashMap;
-use crate::world::{Direction, Entity, TilePos};
 use super::{EntityRef, InserterAnalysis};
+use crate::world::{Direction, Entity, TilePos};
+use std::collections::HashMap;
 
 /// Analyze all inserters in the entity list
 pub fn analyze_inserters(entities: &[Entity]) -> Vec<InserterAnalysis> {
     // Build entity lookup by position
-    let entity_at: HashMap<TilePos, &Entity> = entities
-        .iter()
-        .map(|e| (e.position.to_tile(), e))
-        .collect();
+    let entity_at: HashMap<TilePos, &Entity> =
+        entities.iter().map(|e| (e.position.to_tile(), e)).collect();
 
     entities
         .iter()
@@ -69,10 +67,7 @@ fn analyze_single_inserter(
 }
 
 /// Find inserters that interact with a specific position
-pub fn find_inserters_at_position(
-    entities: &[Entity],
-    target: TilePos,
-) -> Vec<InserterAnalysis> {
+pub fn find_inserters_at_position(entities: &[Entity], target: TilePos) -> Vec<InserterAnalysis> {
     analyze_inserters(entities)
         .into_iter()
         .filter(|i| i.pickup_position == target || i.dropoff_position == target)
@@ -112,9 +107,7 @@ mod tests {
 
     #[test]
     fn test_inserter_positions() {
-        let entities = vec![
-            make_inserter(1, 0, Direction::East, "inserter"),
-        ];
+        let entities = vec![make_inserter(1, 0, Direction::East, "inserter")];
 
         let results = analyze_inserters(&entities);
         assert_eq!(results.len(), 1);
@@ -127,9 +120,7 @@ mod tests {
 
     #[test]
     fn test_long_inserter() {
-        let entities = vec![
-            make_inserter(2, 0, Direction::East, "long-handed-inserter"),
-        ];
+        let entities = vec![make_inserter(2, 0, Direction::East, "long-handed-inserter")];
 
         let results = analyze_inserters(&entities);
         assert_eq!(results.len(), 1);
@@ -152,9 +143,13 @@ mod tests {
 
         let analysis = &results[0];
         assert!(analysis.pickup_target.is_some());
-        assert_eq!(analysis.pickup_target.as_ref().unwrap().name, "transport-belt"); // East-facing picks from east
+        assert_eq!(
+            analysis.pickup_target.as_ref().unwrap().name,
+            "transport-belt"
+        ); // East-facing picks from east
         assert!(analysis.dropoff_target.is_some());
-        assert_eq!(analysis.dropoff_target.as_ref().unwrap().name, "iron-chest"); // Drops to west (opposite)
+        assert_eq!(analysis.dropoff_target.as_ref().unwrap().name, "iron-chest");
+        // Drops to west (opposite)
     }
 
     #[test]

@@ -211,10 +211,7 @@ impl TileArea {
 
     /// Check if a tile is within this area (inclusive)
     pub fn contains(&self, tile: &TilePos) -> bool {
-        tile.x >= self.min.x
-            && tile.x <= self.max.x
-            && tile.y >= self.min.y
-            && tile.y <= self.max.y
+        tile.x >= self.min.x && tile.x <= self.max.x && tile.y >= self.min.y && tile.y <= self.max.y
     }
 }
 

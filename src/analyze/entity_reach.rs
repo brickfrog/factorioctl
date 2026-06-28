@@ -1,7 +1,7 @@
 //! Entity reach analysis - find what entities can interact with a position
 
+use super::{analyze_inserters, EntityReachResult, EntityRef, InserterAnalysis};
 use crate::world::{Entity, TilePos};
-use super::{analyze_inserters, EntityRef, EntityReachResult, InserterAnalysis};
 
 /// Analyze what entities can interact with a given position
 pub fn analyze_entity_reach(
@@ -92,8 +92,14 @@ mod tests {
         let result = analyze_entity_reach(&entities, TilePos::new(0, 0), 2);
 
         assert_eq!(result.belts.len(), 2); // Only nearby belts
-        assert!(result.belts.iter().any(|b| b.position == TilePos::new(0, 0)));
-        assert!(result.belts.iter().any(|b| b.position == TilePos::new(1, 0)));
+        assert!(result
+            .belts
+            .iter()
+            .any(|b| b.position == TilePos::new(0, 0)));
+        assert!(result
+            .belts
+            .iter()
+            .any(|b| b.position == TilePos::new(1, 0)));
     }
 
     #[test]

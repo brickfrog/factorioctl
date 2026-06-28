@@ -994,7 +994,49 @@ rcon.print(helpers.table_to_json({{
             r#"
 {}
 
-local crafted = c.begin_crafting{{ recipe = "{}", count = {} }}
+local recipe_name = "{}"
+local count = {}
+local recipe_proto = prototypes.recipe[recipe_name]
+if not recipe_proto then
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        queued = 0,
+        queue_size = c.crafting_queue_size,
+        queue = {{}},
+        recipe = recipe_name,
+        error = "Unknown recipe"
+    }}))
+    return
+end
+
+local force_recipe = c.force.recipes[recipe_name]
+if force_recipe and not force_recipe.enabled then
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        queued = 0,
+        queue_size = c.crafting_queue_size,
+        queue = {{}},
+        recipe = recipe_name,
+        error = "Recipe is disabled"
+    }}))
+    return
+end
+
+local ok, crafted_or_error = pcall(function()
+    return c.begin_crafting{{ recipe = recipe_name, count = count }}
+end)
+if not ok then
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        queued = 0,
+        queue_size = c.crafting_queue_size,
+        queue = {{}},
+        recipe = recipe_name,
+        error = tostring(crafted_or_error)
+    }}))
+    return
+end
+local crafted = crafted_or_error
 
 -- Build queue info
 local queue = {{}}
@@ -1006,7 +1048,9 @@ rcon.print(helpers.table_to_json({{
     success = crafted > 0,
     queued = crafted,
     queue_size = c.crafting_queue_size,
-    queue = queue
+    queue = queue,
+    recipe = recipe_name,
+    error = crafted > 0 and nil or "Crafting did not start; check ingredients, recipe category, or character craftability"
 }}))
 "#,
             resolve, recipe, count
@@ -1045,20 +1089,50 @@ end"#
 {}
 
 local inv = c.get_main_inventory()
-if not inv or inv.get_item_count("{}") < 1 then
-    rcon.print('{{"error": "Item not in inventory"}}')
+local entity_name = "{}"
+local direction = {}
+local position = {{ {}, {} }}
+local inventory_count = 0
+if inv then
+    inventory_count = inv.get_item_count(entity_name)
+end
+if not inv or inventory_count < 1 then
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        error = "Item not in inventory",
+        entity = entity_name,
+        position = {{ x = position[1], y = position[2] }},
+        direction = direction,
+        inventory_count = inventory_count,
+        can_place = false
+    }}))
     return
 end
 
+local surface = c.surface
+
 -- Clear items on ground in placement area (they would be picked up during normal placement)
-local proto = prototypes.entity["{}"]
+local proto = prototypes.entity[entity_name]
+if not proto then
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        error = "Unknown entity prototype",
+        entity = entity_name,
+        position = {{ x = position[1], y = position[2] }},
+        direction = direction,
+        inventory_count = inventory_count,
+        can_place = false
+    }}))
+    return
+end
+
 if proto and proto.collision_box then
     local cb = proto.collision_box
     local clear_area = {{
-        {{ {} + cb.left_top.x - 0.1, {} + cb.left_top.y - 0.1 }},
-        {{ {} + cb.right_bottom.x + 0.1, {} + cb.right_bottom.y + 0.1 }}
+        {{ position[1] + cb.left_top.x - 0.1, position[2] + cb.left_top.y - 0.1 }},
+        {{ position[1] + cb.right_bottom.x + 0.1, position[2] + cb.right_bottom.y + 0.1 }}
     }}
-    local items_on_ground = game.surfaces[1].find_entities_filtered{{
+    local items_on_ground = surface.find_entities_filtered{{
         area = clear_area,
         type = "item-entity"
     }}
@@ -1083,33 +1157,57 @@ if proto and proto.collision_box then
 end
 
 -- Check if can place (use manual build check for proper collision detection)
-local can_place = game.surfaces[1].can_place_entity{{
-    name = "{}",
-    position = {{ {}, {} }},
-    direction = {},
-    force = c.force,
-    build_check_type = defines.build_check_type.manual
-}}
+local can_place_ok, can_place_or_error = pcall(function()
+    return surface.can_place_entity{{
+        name = entity_name,
+        position = position,
+        direction = direction,
+        force = c.force,
+        build_check_type = defines.build_check_type.manual
+    }}
+end)
 
-if not can_place then
-    rcon.print('{{"error": "Cannot place entity here"}}')
+if not can_place_ok or can_place_or_error ~= true then
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        error = can_place_ok and "Cannot place entity here" or tostring(can_place_or_error),
+        entity = entity_name,
+        position = {{ x = position[1], y = position[2] }},
+        direction = direction,
+        inventory_count = inventory_count,
+        can_place = false
+    }}))
     return
 end
 
--- Note: can_place_entity with build_check_type.manual handles collision detection properly
--- using actual collision masks, not just bounding box overlap
-
 -- Create the entity
-local e = game.surfaces[1].create_entity{{
-    name = "{}",
-    position = {{ {}, {} }},
-    direction = {},
-    force = c.force
-}}
+local create_ok, created_or_error = pcall(function()
+    return surface.create_entity{{
+        name = entity_name,
+        position = position,
+        direction = direction,
+        force = c.force
+    }}
+end)
+
+if not create_ok then
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        error = tostring(created_or_error),
+        entity = entity_name,
+        position = {{ x = position[1], y = position[2] }},
+        direction = direction,
+        inventory_count = inventory_count,
+        can_place = true
+    }}))
+    return
+end
+
+local e = created_or_error
 
 if e then
     {}
-    inv.remove{{ name = "{}", count = 1 }}
+    inv.remove{{ name = entity_name, count = 1 }}
     rcon.print(helpers.table_to_json({{
         unit_number = e.unit_number,
         name = e.name,
@@ -1120,26 +1218,204 @@ if e then
         force = e.force.name
     }}))
 else
-    rcon.print('{{"error": "Failed to create entity"}}')
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        error = "create_entity returned nil after can_place_entity succeeded",
+        entity = entity_name,
+        position = {{ x = position[1], y = position[2] }},
+        direction = direction,
+        inventory_count = inventory_count,
+        can_place = true
+    }}))
 end
 "#,
             resolve,
             entity_name,
-            entity_name,
-            position.x,
-            position.y,
-            position.x,
-            position.y,
-            entity_name,
-            position.x,
-            position.y,
             direction.to_factorio(),
-            entity_name,
             position.x,
             position.y,
-            direction.to_factorio(),
             register,
-            entity_name
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Check whether Factorio itself can place an entity at a position
+    pub fn check_entity_placement(
+        agent_id: &AgentId,
+        entity_name: &str,
+        position: Position,
+        direction: Direction,
+    ) -> String {
+        let resolve = Self::resolve_required(agent_id);
+        let entity_name = Self::lua_escape(entity_name);
+        format!(
+            r#"
+{}
+
+local entity_name = "{}"
+local direction = {}
+local position = {{ {}, {} }}
+local surface = c.surface
+local proto = prototypes.entity[entity_name]
+if not proto then
+    rcon.print(helpers.table_to_json({{
+        factorio_allowed = false,
+        entity = entity_name,
+        position = {{ x = position[1], y = position[2] }},
+        direction = direction,
+        inventory_count = 0,
+        item_in_inventory = false,
+        error = "Unknown entity prototype"
+    }}))
+    return
+end
+
+local inv = c.get_main_inventory()
+local inventory_count = 0
+if inv then
+    inventory_count = inv.get_item_count(entity_name)
+end
+
+local ok, can_place_or_error = pcall(function()
+    return surface.can_place_entity{{
+        name = entity_name,
+        position = position,
+        direction = direction,
+        force = c.force,
+        build_check_type = defines.build_check_type.manual
+    }}
+end)
+
+if not ok then
+    rcon.print(helpers.table_to_json({{
+        factorio_allowed = false,
+        entity = entity_name,
+        position = {{ x = position[1], y = position[2] }},
+        direction = direction,
+        inventory_count = inventory_count,
+        item_in_inventory = inventory_count > 0,
+        error = tostring(can_place_or_error)
+    }}))
+    return
+end
+
+rcon.print(helpers.table_to_json({{
+    factorio_allowed = can_place_or_error == true,
+    entity = entity_name,
+    position = {{ x = position[1], y = position[2] }},
+    direction = direction,
+    inventory_count = inventory_count,
+    item_in_inventory = inventory_count > 0,
+    error = can_place_or_error == true and nil or "Factorio cannot place entity here"
+}}))
+"#,
+            resolve,
+            entity_name,
+            direction.to_factorio(),
+            position.x,
+            position.y
+        )
+        .trim()
+        .to_string()
+    }
+
+    /// Find nearby Factorio-valid placements for an entity in any cardinal direction
+    pub fn find_entity_placements(
+        agent_id: &AgentId,
+        entity_name: &str,
+        center: Position,
+        radius: u32,
+        limit: u32,
+    ) -> String {
+        let resolve = Self::resolve_required(agent_id);
+        let entity_name = Self::lua_escape(entity_name);
+        format!(
+            r#"
+{}
+
+local entity_name = "{}"
+local center = {{ {}, {} }}
+local radius = {}
+local limit = {}
+local surface = c.surface
+local proto = prototypes.entity[entity_name]
+if not proto then
+    rcon.print(helpers.table_to_json({{
+        success = false,
+        error = "Unknown entity prototype",
+        entity = entity_name,
+        center = {{ x = center[1], y = center[2] }},
+        radius = radius,
+        placements = {{}}
+    }}))
+    return
+end
+
+local inv = c.get_main_inventory()
+local inventory_count = 0
+if inv then
+    inventory_count = inv.get_item_count(entity_name)
+end
+
+local directions = {{ 0, 4, 8, 12 }}
+local placements = {{}}
+local checked = 0
+for dx = -radius, radius do
+    for dy = -radius, radius do
+        local position = {{ center[1] + dx, center[2] + dy }}
+        for _, direction in pairs(directions) do
+            checked = checked + 1
+            local ok, can_place = pcall(function()
+                return surface.can_place_entity{{
+                    name = entity_name,
+                    position = position,
+                    direction = direction,
+                    force = c.force,
+                    build_check_type = defines.build_check_type.manual
+                }}
+            end)
+            if ok and can_place == true then
+                local distance = math.sqrt(dx * dx + dy * dy)
+                table.insert(placements, {{
+                    entity = entity_name,
+                    factorio_allowed = true,
+                    position = {{ x = position[1], y = position[2] }},
+                    direction = direction,
+                    distance = distance,
+                    inventory_count = inventory_count,
+                    item_in_inventory = inventory_count > 0
+                }})
+            end
+        end
+    end
+end
+
+table.sort(placements, function(a, b)
+    if a.distance == b.distance then
+        return a.direction < b.direction
+    end
+    return a.distance < b.distance
+end)
+
+local returned = {{}}
+for i = 1, math.min(#placements, limit) do
+    table.insert(returned, placements[i])
+end
+
+rcon.print(helpers.table_to_json({{
+    success = true,
+    entity = entity_name,
+    center = {{ x = center[1], y = center[2] }},
+    radius = radius,
+    checked = checked,
+    total = #placements,
+    returned = #returned,
+    truncated = #placements > #returned,
+    placements = returned
+}}))
+"#,
+            resolve, entity_name, center.x, center.y, radius, limit
         )
         .trim()
         .to_string()

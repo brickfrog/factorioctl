@@ -41,11 +41,17 @@ class SkillTests(unittest.TestCase):
 
         self.assertGreaterEqual(len(missing["skills"]), 3)
         self.assertIn("build_burner_mining_setup", self._names(missing))
+        self.assertIn("build_steam_power", self._names(missing))
+        self.assertIn(
+            "find_entity_placements",
+            " ".join(skills.get_skill(missing, "build_steam_power")["steps"]),
+        )
 
         (self.base / ".skills.json").write_text("{not json")
 
         corrupt = skills.load_library()
         self.assertIn("lay_smelting_line", self._names(corrupt))
+        self.assertIn("build_steam_power", self._names(corrupt))
 
     def test_parse_skill_trailer_extracts_well_formed_block(self):
         parsed = skills.parse_skill_trailer(

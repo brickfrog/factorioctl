@@ -222,6 +222,32 @@ error_tips:
 
         self.assertFalse(pipe._looks_like_tool_error('{"success":true}'))
         self.assertFalse(pipe._looks_like_tool_error("nominal scan complete"))
+        self.assertFalse(pipe._looks_like_tool_error(
+            '[{"type":"text","text":"{\\"technologies\\":[{\\"ready\\":'
+            '\\"blocked\\",\\"blockers\\":[\\"labs have no power\\"]}]}"}]'
+        ))
+
+    def test_player_message_trailer_is_split_from_tool_result_text(self):
+        import pipe
+
+        text, player_messages = pipe._result_text_and_player_messages([{
+            "type": "text",
+            "text": "Error: expected value at line 1 column 1"
+            "\n\n--- Player Messages ---\n[giga]: uncraftable?",
+        }])
+
+        self.assertTrue(pipe._looks_like_tool_error(text))
+        self.assertIn("expected value", text)
+        self.assertNotIn("giga", text)
+        self.assertEqual(player_messages, "[giga]: uncraftable?")
+
+    def test_sdk_terminal_error_echo_is_not_rejournaled(self):
+        import pipe
+
+        self.assertTrue(pipe._is_sdk_terminal_error_echo(
+            "Claude Code returned an error result: Reached maximum number of turns (15)"
+        ))
+        self.assertFalse(pipe._is_sdk_terminal_error_echo("RCON connection dropped"))
 
     def test_run_agent_journals_sdk_tool_result_failures(self):
         # The whole point of the SDK migration: tool failures arrive as
@@ -240,6 +266,15 @@ error_tips:
                 tool_use_id="t2", content=[{"type": "text", "text": "boom"}], is_error=True)]),
             UserMessage(content=[ToolResultBlock(
                 tool_use_id="t3", content="Error: cannot place stone furnace", is_error=False)]),
+            UserMessage(content=[ToolResultBlock(
+                tool_use_id="t4",
+                content=[{
+                    "type": "text",
+                    "text": "Error: invalid JSON"
+                    "\n\n--- Player Messages ---\n[giga]: I put wood in a chest",
+                }],
+                is_error=False,
+            )]),
             UserMessage(content="Error: invalid type: map, expected a sequence"),
             UserMessage(content="just narrating, nothing wrong here"),
         ]
@@ -261,11 +296,13 @@ error_tips:
             ))
 
         texts = [event["text"] for event in journal.load_events("doug")]
-        # is_error=True, error-text list-block, and string-wrapped error -> 3 failures
-        self.assertEqual(len(texts), 3)
+        # is_error=True, error-text list-blocks, and string-wrapped error -> 4 failures
+        self.assertEqual(len(texts), 4)
         self.assertTrue(any("boom" in t for t in texts))
         self.assertTrue(any("cannot place stone furnace" in t for t in texts))
+        self.assertTrue(any("invalid JSON" in t for t in texts))
         self.assertTrue(any("invalid type: map" in t for t in texts))
+        self.assertFalse(any("giga" in t for t in texts))
         # success result and benign narration must NOT be journaled
         self.assertFalse(any("ok scan complete" in t for t in texts))
         self.assertFalse(any("narrating" in t for t in texts))

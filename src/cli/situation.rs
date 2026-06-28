@@ -5,7 +5,7 @@ use clap::Args;
 
 use super::ResolvedConnectionArgs;
 use crate::output::Output;
-use crate::world::{Area, Position, build_situation_report};
+use crate::world::{build_situation_report, Area, Position};
 
 #[derive(Args, Debug)]
 pub struct SituationCommand {

@@ -1,8 +1,8 @@
 //! BFS-based belt reachability analysis
 
-use std::collections::{HashSet, VecDeque};
-use crate::world::TilePos;
 use super::{BeltGraph, BeltReachResult};
+use crate::world::TilePos;
+use std::collections::{HashSet, VecDeque};
 
 /// Analyze belt connectivity from a starting position using BFS
 pub fn analyze_belt_reach(graph: &BeltGraph, start: TilePos) -> Option<BeltReachResult> {

@@ -1,5 +1,5 @@
 use factorioctl::world::{
-    Area, Entity, InventoryItem, Position, ResourcePatch, build_situation_report,
+    build_situation_report, Area, Entity, InventoryItem, Position, ResourcePatch,
 };
 use serde_json::json;
 

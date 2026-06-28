@@ -2,6 +2,7 @@
 //!
 //! Exposes Factorio control as MCP tools for LLM agents.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -153,6 +154,16 @@ pub struct GetEntitiesParams {
     pub radius: u32,
     /// Optional: filter by entity name (e.g., 'transport-belt')
     pub name: Option<String>,
+    /// Optional: filter by entity type (e.g., 'container', 'resource', 'lab')
+    #[serde(default)]
+    pub entity_type: Option<String>,
+    /// Maximum entities to return before summarizing (default: 100)
+    #[serde(default = "default_entity_limit")]
+    pub limit: usize,
+}
+
+fn default_entity_limit() -> usize {
+    100
 }
 
 /// Parameters for get_resources tool
@@ -242,6 +253,31 @@ pub struct PlaceEntityParams {
     pub direction: String,
 }
 
+/// Parameters for find_entity_placements tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct FindEntityPlacementsParams {
+    /// Entity name (e.g., 'offshore-pump', 'steam-engine', 'boiler')
+    pub entity_name: String,
+    /// X coordinate of search center
+    pub x: f64,
+    /// Y coordinate of search center
+    pub y: f64,
+    /// Search radius in tiles (default: 10)
+    #[serde(default = "default_placement_radius")]
+    pub radius: u32,
+    /// Maximum candidate placements to return (default: 20, max: 100)
+    #[serde(default = "default_placement_limit")]
+    pub limit: u32,
+}
+
+fn default_placement_radius() -> u32 {
+    10
+}
+
+fn default_placement_limit() -> u32 {
+    20
+}
+
 /// Parameters for mine_at tool
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct MineAtParams {
@@ -266,6 +302,27 @@ pub struct CraftParams {
     /// Number to craft
     #[serde(default = "default_count")]
     pub count: u32,
+}
+
+/// Parameters for get_recipe tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetRecipeParams {
+    /// Recipe name (e.g., 'boiler', 'iron-gear-wheel')
+    pub name: String,
+}
+
+/// Parameters for get_recipes_for_item tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetRecipesForItemParams {
+    /// Item/fluid name produced by recipes (e.g., 'boiler', 'steam-engine')
+    pub item: String,
+}
+
+/// Parameters for get_recipes_by_category tool
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetRecipesByCategoryParams {
+    /// Recipe category (e.g., 'crafting', 'smelting')
+    pub category: String,
 }
 
 /// Parameters for insert_items tool
@@ -605,6 +662,9 @@ pub struct CheckPlacementParams {
     pub x: f64,
     /// Y coordinate to check
     pub y: f64,
+    /// Direction: "north", "east", "south", "west" (or shorthand "n", "e", "s", "w", or numbers 0/4/8/12)
+    #[serde(default)]
+    pub direction: String,
 }
 
 /// Parameters for find_build_area tool
@@ -783,7 +843,7 @@ impl FactorioMcp {
 
     /// Get all entities in an area. Returns entity names, positions, and types.
     #[tool(
-        description = "Get all entities in an area. Returns entity names, positions, types, and unit numbers. TIP: Don't scan excessively - trust your memory of recent scans."
+        description = "Get entities in an area. Prefer name/type filters. Large results are capped and summarized; use a smaller radius or limit for details."
     )]
     async fn get_entities(&self, Parameters(params): Parameters<GetEntitiesParams>) -> String {
         let mut client = match self.connect().await {
@@ -807,8 +867,13 @@ impl FactorioMcp {
             .await
         {
             Ok(entities) => {
+                let type_filter = params.entity_type.as_deref();
                 let info: Vec<serde_json::Value> = entities
                     .into_iter()
+                    .filter(|e| match type_filter {
+                        Some(t) => e.entity_type.as_deref() == Some(t),
+                        None => true,
+                    })
                     .map(|e| {
                         // Calculate size from bounding box if available
                         let size = e.bounding_box.as_ref().map(|bb| {
@@ -827,7 +892,35 @@ impl FactorioMcp {
                         })
                     })
                     .collect();
-                serde_json::to_string_pretty(&info).unwrap_or_else(|e| format!("Error: {}", e))
+                let total = info.len();
+                let limit = params.limit.clamp(1, 500);
+                if total > limit {
+                    let mut summary_by_name: BTreeMap<String, usize> = BTreeMap::new();
+                    let mut summary_by_type: BTreeMap<String, usize> = BTreeMap::new();
+                    for entity in &info {
+                        if let Some(name) = entity.get("name").and_then(|v| v.as_str()) {
+                            *summary_by_name.entry(name.to_string()).or_insert(0) += 1;
+                        }
+                        if let Some(entity_type) = entity.get("type").and_then(|v| v.as_str()) {
+                            *summary_by_type.entry(entity_type.to_string()).or_insert(0) += 1;
+                        }
+                    }
+                    let page: Vec<serde_json::Value> = info.into_iter().take(limit).collect();
+                    let capped = serde_json::json!({
+                        "truncated": true,
+                        "total": total,
+                        "returned": page.len(),
+                        "limit": limit,
+                        "summary_by_name": summary_by_name,
+                        "summary_by_type": summary_by_type,
+                        "entities": page,
+                        "guidance": "Narrow by name/entity_type, reduce radius, or pass limit for a smaller page."
+                    });
+                    serde_json::to_string_pretty(&capped)
+                        .unwrap_or_else(|e| format!("Error: {}", e))
+                } else {
+                    serde_json::to_string_pretty(&info).unwrap_or_else(|e| format!("Error: {}", e))
+                }
             }
             Err(e) => format!("Error: {}", e),
         };
@@ -1565,7 +1658,9 @@ impl FactorioMcp {
     }
 
     /// Place an entity from character inventory.
-    #[tool(description = "Place an entity from character inventory at a position.")]
+    #[tool(
+        description = "Place an entity from character inventory at a position. On failure, returns structured diagnostics including can_place, inventory_count, direction, and position."
+    )]
     async fn place_entity(&self, Parameters(params): Parameters<PlaceEntityParams>) -> String {
         let mut client = match self.connect().await {
             Ok(c) => c,
@@ -1589,13 +1684,85 @@ impl FactorioMcp {
             }
         };
 
-        let result = match client
-            .place_entity(&params.entity_name, position, direction)
-            .await
-        {
-            Ok(r) => serde_json::to_string_pretty(&r).unwrap_or_else(|e| format!("Error: {}", e)),
+        let lua = LuaCommand::place_entity(
+            &client.agent_id().clone(),
+            &params.entity_name,
+            position,
+            direction,
+        );
+        let result = match client.execute_lua(&lua).await {
+            Ok(response) => match serde_json::from_str::<serde_json::Value>(&response) {
+                Ok(value) => {
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|e| format!("Error: {}", e))
+                }
+                Err(_) => response,
+            },
             Err(e) => format!("Error: {}", e),
         };
+        self.with_player_messages(result).await
+    }
+
+    /// Find nearby valid placements for an entity.
+    #[tool(
+        description = "Find nearby Factorio-valid placements for an entity in all cardinal directions. Use for fussy entities like offshore-pump, boiler, and steam-engine instead of guessing coordinates."
+    )]
+    async fn find_entity_placements(
+        &self,
+        Parameters(params): Parameters<FindEntityPlacementsParams>,
+    ) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let memory = AgentMemory::load();
+        let center = Position::new(params.x, params.y);
+        let radius = params.radius.clamp(1, 25);
+        let limit = params.limit.clamp(1, 100);
+
+        let mut result = match client
+            .find_entity_placements(&params.entity_name, center, radius, limit)
+            .await
+        {
+            Ok(value) => value,
+            Err(e) => serde_json::json!({
+                "success": false,
+                "error": format!("Placement search failed: {}", e),
+                "entity": params.entity_name,
+                "center": { "x": params.x, "y": params.y },
+                "radius": radius,
+                "placements": []
+            }),
+        };
+
+        if let Some(placements) = result.get_mut("placements").and_then(|v| v.as_array_mut()) {
+            for placement in placements {
+                let Some(position) = placement.get("position") else {
+                    continue;
+                };
+                let x = position
+                    .get("x")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(params.x);
+                let y = position
+                    .get("y")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(params.y);
+                let policy = memory.check_placement(&params.entity_name, &Position::new(x, y));
+                if let Some(obj) = placement.as_object_mut() {
+                    obj.insert(
+                        "policy_allowed".to_string(),
+                        serde_json::json!(policy.allowed),
+                    );
+                    obj.insert("allowed".to_string(), serde_json::json!(policy.allowed));
+                    obj.insert("warnings".to_string(), serde_json::json!(policy.warnings));
+                    obj.insert("errors".to_string(), serde_json::json!(policy.errors));
+                }
+            }
+        }
+
+        let result =
+            serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e));
         self.with_player_messages(result).await
     }
 
@@ -1628,6 +1795,68 @@ impl FactorioMcp {
         let result = match client.craft(&params.recipe, params.count).await {
             Ok(result) => {
                 serde_json::to_string_pretty(&result).unwrap_or_else(|e| format!("Error: {}", e))
+            }
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Get a recipe by exact name.
+    #[tool(
+        description = "Look up one recipe by exact name. Use before guessing recipe names or when craft reports an unknown/disabled recipe."
+    )]
+    async fn get_recipe(&self, Parameters(params): Parameters<GetRecipeParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = LuaCommand::get_recipe(&params.name);
+        let result = match client.execute_lua(&lua).await {
+            Ok(response) => response,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// Find recipes that produce an item or fluid.
+    #[tool(
+        description = "Find recipes that produce the requested item/fluid, such as 'boiler', 'steam-engine', or 'iron-plate'. Use this instead of guessing recipe names."
+    )]
+    async fn get_recipes_for_item(
+        &self,
+        Parameters(params): Parameters<GetRecipesForItemParams>,
+    ) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let result = match client.get_recipes_for_item(&params.item).await {
+            Ok(recipes) => {
+                serde_json::to_string_pretty(&recipes).unwrap_or_else(|e| format!("Error: {}", e))
+            }
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
+    /// List recipes in a crafting category.
+    #[tool(
+        description = "List recipes in a category such as 'crafting' or 'smelting'. Prefer get_recipes_for_item for a specific desired output."
+    )]
+    async fn get_recipes_by_category(
+        &self,
+        Parameters(params): Parameters<GetRecipesByCategoryParams>,
+    ) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let result = match client.get_recipes_by_category(&params.category).await {
+            Ok(recipes) => {
+                serde_json::to_string_pretty(&recipes).unwrap_or_else(|e| format!("Error: {}", e))
             }
             Err(e) => format!("Error: {}", e),
         };
@@ -2684,10 +2913,9 @@ end
 
     // === Layout Assistance Tools ===
 
-    /// Check if a placement is appropriate.
+    /// Check if a placement is appropriate and possible.
     #[tool(
-        description = "Check if placing an entity at a position is appropriate. \
-        Validates against zones and protected resources. Use this before placing buildings to avoid bad locations."
+        description = "Check if placing an entity at a position is both policy-appropriate and actually placeable by Factorio. Returns policy_allowed and factorio_allowed separately."
     )]
     async fn check_placement(
         &self,
@@ -2695,16 +2923,66 @@ end
     ) -> String {
         let memory = AgentMemory::load();
         let pos = Position::new(params.x, params.y);
-        let check = memory.check_placement(&params.entity_name, &pos);
+        let policy_check = memory.check_placement(&params.entity_name, &pos);
+
+        let direction = if params.direction.is_empty() {
+            Direction::North
+        } else {
+            match Direction::parse(&params.direction) {
+                Some(d) => d,
+                None => {
+                    let result = serde_json::json!({
+                        "allowed": false,
+                        "policy_allowed": policy_check.allowed,
+                        "factorio_allowed": false,
+                        "entity": params.entity_name,
+                        "position": { "x": params.x, "y": params.y },
+                        "direction": params.direction,
+                        "warnings": policy_check.warnings,
+                        "errors": ["Invalid direction. Use: north/n, east/e, south/s, west/w (or 0/4/8/12)"],
+                        "overlapping_zones": policy_check.overlapping_zones,
+                        "overlapping_resources": policy_check.overlapping_resources
+                    });
+                    let result_str = serde_json::to_string_pretty(&result)
+                        .unwrap_or_else(|e| format!("Error: {}", e));
+                    return self.with_player_messages(result_str).await;
+                }
+            }
+        };
+
+        let factorio_check = match self.connect().await {
+            Ok(mut client) => match client
+                .check_entity_placement(&params.entity_name, pos, direction)
+                .await
+            {
+                Ok(value) => value,
+                Err(e) => serde_json::json!({
+                    "factorio_allowed": false,
+                    "error": format!("Factorio placement check failed: {}", e)
+                }),
+            },
+            Err(e) => serde_json::json!({
+                "factorio_allowed": false,
+                "error": format!("Factorio connection failed: {}", e)
+            }),
+        };
+        let factorio_allowed = factorio_check
+            .get("factorio_allowed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let result = serde_json::json!({
-            "allowed": check.allowed,
+            "allowed": policy_check.allowed && factorio_allowed,
+            "policy_allowed": policy_check.allowed,
+            "factorio_allowed": factorio_allowed,
             "entity": params.entity_name,
             "position": { "x": params.x, "y": params.y },
-            "warnings": check.warnings,
-            "errors": check.errors,
-            "overlapping_zones": check.overlapping_zones,
-            "overlapping_resources": check.overlapping_resources
+            "direction": direction.to_factorio(),
+            "warnings": policy_check.warnings,
+            "errors": policy_check.errors,
+            "overlapping_zones": policy_check.overlapping_zones,
+            "overlapping_resources": policy_check.overlapping_resources,
+            "factorio": factorio_check
         });
 
         let result_str =

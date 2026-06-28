@@ -1,8 +1,8 @@
 //! Connected component analysis for belt networks
 
-use std::collections::{HashSet, VecDeque};
-use crate::world::TilePos;
 use super::{BeltGraph, BeltNetwork, BeltNetworkResult};
+use crate::world::TilePos;
+use std::collections::{HashSet, VecDeque};
 
 /// Find all connected belt networks in the graph
 pub fn find_belt_networks(graph: &BeltGraph) -> BeltNetworkResult {

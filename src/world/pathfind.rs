@@ -89,10 +89,7 @@ enum MoveType {
     /// Moved one tile in a direction (surface belt)
     Surface(Direction),
     /// Jumped underground from entry to exit
-    Underground {
-        direction: Direction,
-        distance: u32,
-    },
+    Underground { direction: Direction, distance: u32 },
 }
 
 /// Grid position for pathfinding (integer coordinates)
@@ -422,7 +419,12 @@ pub fn find_belt_route_with_options(
         // Explore underground jumps if enabled
         if let Some(ref ug_config) = options.underground_config {
             if options.allow_underground {
-                for direction in [Direction::North, Direction::East, Direction::South, Direction::West] {
+                for direction in [
+                    Direction::North,
+                    Direction::East,
+                    Direction::South,
+                    Direction::West,
+                ] {
                     // Try underground jumps of length 2 to max_distance
                     for distance in 2..=ug_config.max_distance {
                         let exit_pos = current.pos.offset(direction, distance as i32);
@@ -453,7 +455,13 @@ pub fn find_belt_route_with_options(
                             // This underground path is better
                             came_from.insert(
                                 exit_pos,
-                                (current.pos, MoveType::Underground { direction, distance }),
+                                (
+                                    current.pos,
+                                    MoveType::Underground {
+                                        direction,
+                                        distance,
+                                    },
+                                ),
                             );
                             g_score.insert(exit_pos, tentative_g);
 
@@ -562,9 +570,7 @@ fn path_to_belt_placements(path: &[GridPos]) -> Vec<BeltPlacement> {
 }
 
 /// Convert a path with move types into belt placements (with underground support)
-fn path_to_belt_placements_with_moves(
-    path: &[(GridPos, Option<MoveType>)],
-) -> Vec<BeltPlacement> {
+fn path_to_belt_placements_with_moves(path: &[(GridPos, Option<MoveType>)]) -> Vec<BeltPlacement> {
     if path.len() < 2 {
         return vec![];
     }
@@ -614,8 +620,12 @@ fn path_to_belt_placements_with_moves(
                     let (prev_pos, prev_move) = &path[i - 1];
                     // Use the direction from the previous move, or calculate from position delta
                     let direction = match prev_move {
-                        Some(MoveType::Surface(d)) | Some(MoveType::Underground { direction: d, .. }) => *d,
-                        None => direction_from_delta(current_pos.x - prev_pos.x, current_pos.y - prev_pos.y),
+                        Some(MoveType::Surface(d))
+                        | Some(MoveType::Underground { direction: d, .. }) => *d,
+                        None => direction_from_delta(
+                            current_pos.x - prev_pos.x,
+                            current_pos.y - prev_pos.y,
+                        ),
                     };
                     placements.push(BeltPlacement {
                         position: current_pos.to_position(),
@@ -657,7 +667,11 @@ fn count_turns(belts: &[BeltPlacement]) -> u32 {
 }
 
 /// A* pathfinding for walking (returns simplified waypoints)
-pub fn find_walk_path(start: GridPos, goal: GridPos, collision_map: &CollisionMap) -> WalkPathResult {
+pub fn find_walk_path(
+    start: GridPos,
+    goal: GridPos,
+    collision_map: &CollisionMap,
+) -> WalkPathResult {
     // Check start and goal are valid
     if !collision_map.is_walkable(&start) {
         return WalkPathResult {
@@ -766,7 +780,9 @@ fn simplify_walk_path(path: &[GridPos]) -> Vec<GridPos> {
         let dy = path[i].y - path[i - 1].y;
         let current_direction = (dx, dy);
 
-        let is_turn = last_direction.map(|d| d != current_direction).unwrap_or(false);
+        let is_turn = last_direction
+            .map(|d| d != current_direction)
+            .unwrap_or(false);
         steps_since_waypoint += 1;
 
         // Add waypoint on direction change or after max steps
@@ -979,11 +995,8 @@ mod tests {
         collision_map.block(GridPos::new(2, 0));
 
         // Without underground: must go around (more belts, turns)
-        let result_no_underground = find_belt_route(
-            GridPos::new(0, 0),
-            GridPos::new(3, 0),
-            &collision_map,
-        );
+        let result_no_underground =
+            find_belt_route(GridPos::new(0, 0), GridPos::new(3, 0), &collision_map);
         assert!(result_no_underground.success);
         assert!(result_no_underground.belt_count > 4); // Must go around
         assert!(result_no_underground.turn_count >= 2); // At least 2 turns

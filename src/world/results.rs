@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::entity::InventoryItem;
-use super::Position;
 use super::Entity;
+use super::Position;
 use super::TilePos;
 
 /// Result of a gather operation

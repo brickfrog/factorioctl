@@ -3,26 +3,26 @@
 //! This module provides graph-based analysis of belt networks, inserter
 //! configurations, and entity interactions.
 
-mod belt_graph;
-mod belt_reach;
-mod belt_network;
 mod belt_gaps;
-mod belt_sushi;
+mod belt_graph;
+mod belt_network;
+mod belt_reach;
 mod belt_source_trace;
-mod inserter;
+mod belt_sushi;
 mod entity_reach;
+mod inserter;
 
-pub use belt_graph::*;
-pub use belt_reach::*;
-pub use belt_network::*;
 pub use belt_gaps::*;
-pub use belt_sushi::*;
+pub use belt_graph::*;
+pub use belt_network::*;
+pub use belt_reach::*;
 pub use belt_source_trace::*;
-pub use inserter::*;
+pub use belt_sushi::*;
 pub use entity_reach::*;
+pub use inserter::*;
 
-use serde::{Deserialize, Serialize};
 use crate::world::{Direction, TilePos};
+use serde::{Deserialize, Serialize};
 
 /// Reference to an entity for analysis results
 #[derive(Debug, Clone, Serialize, Deserialize)]

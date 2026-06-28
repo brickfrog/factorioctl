@@ -179,9 +179,7 @@ impl ZoneType {
                 let allowed = self.allowed_entities();
                 // Check for exact match or partial match (for belt variants, etc.)
                 allowed.iter().any(|a| {
-                    entity_name == *a
-                        || entity_name.contains(a)
-                        || a.contains(entity_name)
+                    entity_name == *a || entity_name.contains(a) || a.contains(entity_name)
                 })
             }
         }
@@ -190,7 +188,7 @@ impl ZoneType {
     /// Get belt routing behavior for this zone type
     pub fn belt_routing(&self) -> BeltRouting {
         match self {
-            ZoneType::Mining => BeltRouting::Allowed,      // Belts extract ore from mining
+            ZoneType::Mining => BeltRouting::Allowed, // Belts extract ore from mining
             ZoneType::Logistics => BeltRouting::Preferred, // Belt highways - lower cost
             ZoneType::Smelting
             | ZoneType::Assembly
@@ -375,8 +373,7 @@ impl AgentMemory {
     pub fn save_to(&self, path: &PathBuf) -> Result<(), String> {
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize memory: {}", e))?;
-        std::fs::write(path, content)
-            .map_err(|e| format!("Failed to write memory file: {}", e))
+        std::fs::write(path, content).map_err(|e| format!("Failed to write memory file: {}", e))
     }
 
     // === Zone Management ===
@@ -398,10 +395,7 @@ impl AgentMemory {
 
     /// Find all zones containing a position
     pub fn zones_at(&self, pos: &Position) -> Vec<&Zone> {
-        self.zones
-            .values()
-            .filter(|z| z.contains(pos))
-            .collect()
+        self.zones.values().filter(|z| z.contains(pos)).collect()
     }
 
     /// Find all zones overlapping an area
@@ -418,8 +412,7 @@ impl AgentMemory {
     pub fn add_protected_resource(&mut self, resource: ProtectedResource) {
         // Check if we already have this resource (same type and overlapping bounds)
         let exists = self.protected_resources.iter().any(|r| {
-            r.resource_type == resource.resource_type
-                && areas_overlap(&r.bounds, &resource.bounds)
+            r.resource_type == resource.resource_type && areas_overlap(&r.bounds, &resource.bounds)
         });
 
         if !exists {

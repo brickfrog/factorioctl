@@ -125,6 +125,25 @@ fn all_lua_cases() -> Vec<LuaCase> {
             ),
         ),
         LuaCase::new(
+            "check_entity_placement",
+            LuaCommand::check_entity_placement(
+                &legacy_agent(),
+                "offshore-pump",
+                pos(18.0, 19.0),
+                Direction::West,
+            ),
+        ),
+        LuaCase::new(
+            "find_entity_placements",
+            LuaCommand::find_entity_placements(
+                &legacy_agent(),
+                "offshore-pump",
+                pos(18.0, 19.0),
+                10,
+                20,
+            ),
+        ),
+        LuaCase::new(
             "place_underground_belt",
             LuaCommand::place_underground_belt(
                 &legacy_agent(),
@@ -592,7 +611,49 @@ for _, p in pairs(game.connected_players) do if p.character and p.character.vali
 if not c then c = storage.factorioctl_characters["__player__"] end
 if not (c and c.valid) then rcon.print('{"error":"no character for agent __player__; spawn first"}') return end
 
-local crafted = c.begin_crafting{ recipe = "iron-gear-wheel", count = 4 }
+local recipe_name = "iron-gear-wheel"
+local count = 4
+local recipe_proto = prototypes.recipe[recipe_name]
+if not recipe_proto then
+    rcon.print(helpers.table_to_json({
+        success = false,
+        queued = 0,
+        queue_size = c.crafting_queue_size,
+        queue = {},
+        recipe = recipe_name,
+        error = "Unknown recipe"
+    }))
+    return
+end
+
+local force_recipe = c.force.recipes[recipe_name]
+if force_recipe and not force_recipe.enabled then
+    rcon.print(helpers.table_to_json({
+        success = false,
+        queued = 0,
+        queue_size = c.crafting_queue_size,
+        queue = {},
+        recipe = recipe_name,
+        error = "Recipe is disabled"
+    }))
+    return
+end
+
+local ok, crafted_or_error = pcall(function()
+    return c.begin_crafting{ recipe = recipe_name, count = count }
+end)
+if not ok then
+    rcon.print(helpers.table_to_json({
+        success = false,
+        queued = 0,
+        queue_size = c.crafting_queue_size,
+        queue = {},
+        recipe = recipe_name,
+        error = tostring(crafted_or_error)
+    }))
+    return
+end
+local crafted = crafted_or_error
 
 -- Build queue info
 local queue = {}
@@ -604,8 +665,57 @@ rcon.print(helpers.table_to_json({
     success = crafted > 0,
     queued = crafted,
     queue_size = c.crafting_queue_size,
-    queue = queue
+    queue = queue,
+    recipe = recipe_name,
+    error = crafted > 0 and nil or "Crafting did not start; check ingredients, recipe category, or character craftability"
 }))"#,
+    );
+}
+
+#[test]
+fn placement_diagnostics_are_structured_for_fluid_entities() {
+    let check = LuaCommand::check_entity_placement(
+        &legacy_agent(),
+        "offshore-pump",
+        pos(-39.0, 37.0),
+        Direction::West,
+    );
+    assert!(
+        check.contains("surface.can_place_entity")
+            && check.contains("factorio_allowed")
+            && check.contains("inventory_count")
+            && check.contains("item_in_inventory"),
+        "check_entity_placement should report Factorio placement and inventory diagnostics:\n{check}"
+    );
+
+    let place = LuaCommand::place_entity(
+        &legacy_agent(),
+        "steam-engine",
+        pos(-37.0, 37.0),
+        Direction::East,
+    );
+    assert!(
+        place.contains("local create_ok, created_or_error = pcall(function()")
+            && place.contains("create_entity returned nil after can_place_entity succeeded")
+            && place.contains("can_place = true")
+            && place.contains("inventory_count = inventory_count"),
+        "place_entity should explain mismatches between can_place_entity and create_entity:\n{place}"
+    );
+
+    let search = LuaCommand::find_entity_placements(
+        &legacy_agent(),
+        "offshore-pump",
+        pos(-39.0, 37.0),
+        10,
+        20,
+    );
+    assert!(
+        search.contains("local directions = { 0, 4, 8, 12 }")
+            && search.contains("surface.can_place_entity")
+            && search.contains("factorio_allowed = true")
+            && search.contains("table.sort(placements")
+            && search.contains("truncated = #placements > #returned"),
+        "find_entity_placements should scan all cardinal directions and return nearest candidates:\n{search}"
     );
 }
 

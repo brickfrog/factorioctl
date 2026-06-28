@@ -154,10 +154,7 @@ impl Outputable for crate::world::Tile {
     fn format_human(&self) -> String {
         format!(
             "Tile: {} at ({}, {})\n  Walkable: {}",
-            self.name,
-            self.position.x as i32,
-            self.position.y as i32,
-            !self.collides_with_player
+            self.name, self.position.x as i32, self.position.y as i32, !self.collides_with_player
         )
     }
 }
@@ -533,19 +530,28 @@ impl Outputable for crate::world::BlueprintPlaceResult {
 impl Outputable for crate::analyze::BeltReachResult {
     fn format_human(&self) -> String {
         let mut lines = vec![
-            format!("Belt Reachability from ({}, {})", self.origin.x, self.origin.y),
+            format!(
+                "Belt Reachability from ({}, {})",
+                self.origin.x, self.origin.y
+            ),
             format!("  Total connected belts: {}", self.total_belts),
             format!("  Upstream belts: {}", self.upstream.len()),
             format!("  Downstream belts: {}", self.downstream.len()),
         ];
         if !self.upstream_endpoints.is_empty() {
-            lines.push(format!("  Input endpoints ({}):", self.upstream_endpoints.len()));
+            lines.push(format!(
+                "  Input endpoints ({}):",
+                self.upstream_endpoints.len()
+            ));
             for ep in &self.upstream_endpoints {
                 lines.push(format!("    ({}, {})", ep.x, ep.y));
             }
         }
         if !self.downstream_endpoints.is_empty() {
-            lines.push(format!("  Output endpoints ({}):", self.downstream_endpoints.len()));
+            lines.push(format!(
+                "  Output endpoints ({}):",
+                self.downstream_endpoints.len()
+            ));
             for ep in &self.downstream_endpoints {
                 lines.push(format!("    ({}, {})", ep.x, ep.y));
             }
@@ -563,7 +569,10 @@ impl Outputable for crate::analyze::BeltNetworkResult {
         for network in &self.networks {
             lines.push(format!(
                 "  Network #{}: {} belts, {} inputs, {} outputs",
-                network.id, network.belt_count, network.inputs.len(), network.outputs.len()
+                network.id,
+                network.belt_count,
+                network.inputs.len(),
+                network.outputs.len()
             ));
         }
         lines.join("\n")
@@ -583,7 +592,10 @@ impl Outputable for crate::analyze::BeltGapResult {
                     format!("misaligned: {}", gap.blocker.as_deref().unwrap_or(""))
                 }
                 crate::analyze::GapType::Blocked => {
-                    format!("blocked by: {}", gap.blocker.as_deref().unwrap_or("unknown"))
+                    format!(
+                        "blocked by: {}",
+                        gap.blocker.as_deref().unwrap_or("unknown")
+                    )
                 }
             };
             lines.push(format!(
@@ -751,7 +763,10 @@ impl Outputable for crate::analyze::SushiDetectionResult {
         }
 
         if !self.looping_networks.is_empty() {
-            lines.push(format!("  Looping networks ({}):", self.looping_networks.len()));
+            lines.push(format!(
+                "  Looping networks ({}):",
+                self.looping_networks.len()
+            ));
             for (i, loop_path) in self.looping_networks.iter().enumerate() {
                 let path_str: Vec<String> = loop_path
                     .iter()
@@ -772,7 +787,10 @@ impl Outputable for crate::analyze::BeltSourceTraceResult {
             self.origin.x, self.origin.y
         )];
 
-        lines.push(format!("  Traced {} belts upstream", self.traced_belt_count));
+        lines.push(format!(
+            "  Traced {} belts upstream",
+            self.traced_belt_count
+        ));
 
         if self.is_loop {
             lines.push("  WARNING: This belt is part of a circular loop".to_string());
@@ -796,7 +814,10 @@ impl Outputable for crate::analyze::BeltSourceTraceResult {
         lines.push(format!("  Total sources found: {}", total_sources));
 
         if !self.left_lane_sources.is_empty() {
-            lines.push(format!("  Left lane sources ({}):", self.left_lane_sources.len()));
+            lines.push(format!(
+                "  Left lane sources ({}):",
+                self.left_lane_sources.len()
+            ));
             for src in &self.left_lane_sources {
                 lines.push(format!(
                     "    {} {} at ({}, {})",

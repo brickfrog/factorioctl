@@ -108,6 +108,7 @@ from paths import find_mod_source, find_mods_dir
 from telemetry import SSEBroadcaster, start_sse_server, RelayPusher, Telemetry, emit_chat, emit_tool_call, emit_error, emit_status
 
 _BRIDGE_DIR = Path(__file__).resolve().parent
+_PLAYER_MESSAGES_MARKER = "\n\n--- Player Messages ---\n"
 SESSIONS_FILE = _BRIDGE_DIR / ".sessions.json"
 _RCON_PRINT = "rcon." + "pr" + "int"
 
@@ -336,6 +337,63 @@ def _result_text(content: str | list[dict[str, Any]] | None) -> str:
     return _json_for_log(content)
 
 
+def _split_player_messages(text: str) -> tuple[str, str]:
+    if not isinstance(text, str):
+        return str(text), ""
+    if _PLAYER_MESSAGES_MARKER in text:
+        tool_text, player_text = text.split(_PLAYER_MESSAGES_MARKER, 1)
+        return tool_text.rstrip(), player_text.strip()
+    return text, ""
+
+
+def _strip_player_messages_from_value(value: Any) -> tuple[Any, list[str]]:
+    if isinstance(value, dict):
+        if value.get("type") == "text":
+            stripped, player_text = _split_player_messages(str(value.get("text", "")))
+            updated = dict(value)
+            updated["text"] = stripped
+            return updated, [player_text] if player_text else []
+        updated = {}
+        player_messages: list[str] = []
+        for key, item in value.items():
+            updated_item, item_messages = _strip_player_messages_from_value(item)
+            updated[key] = updated_item
+            player_messages.extend(item_messages)
+        return updated, player_messages
+    if isinstance(value, list):
+        updated_items = []
+        player_messages: list[str] = []
+        for item in value:
+            updated_item, item_messages = _strip_player_messages_from_value(item)
+            updated_items.append(updated_item)
+            player_messages.extend(item_messages)
+        return updated_items, player_messages
+    return value, []
+
+
+def _result_text_and_player_messages(
+    content: str | list[dict[str, Any]] | None,
+) -> tuple[str, str]:
+    if content is None:
+        return "", ""
+
+    if isinstance(content, str):
+        tool_text, player_text = _split_player_messages(content)
+        if player_text:
+            return tool_text, player_text
+        try:
+            parsed = json.loads(content)
+        except (TypeError, ValueError):
+            return content, ""
+        stripped, player_messages = _strip_player_messages_from_value(parsed)
+        if player_messages:
+            return _json_for_log(stripped), "\n".join(player_messages)
+        return content, ""
+
+    stripped, player_messages = _strip_player_messages_from_value(content)
+    return _json_for_log(stripped), "\n".join(player_messages)
+
+
 def _json_payload_has_error(value: Any) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -355,6 +413,24 @@ def _json_payload_has_error(value: Any) -> bool:
     return False
 
 
+def _json_text_block_has_error(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("type") == "text":
+            text = str(value.get("text", "")).strip()
+            lowered = text.lower()
+            if lowered.startswith("error:") or lowered.startswith("cannot "):
+                return True
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError):
+                return False
+            return _json_payload_has_error(parsed)
+        return any(_json_text_block_has_error(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_json_text_block_has_error(item) for item in value)
+    return False
+
+
 def _looks_like_tool_error(text: str) -> bool:
     """Detect factorioctl game-logic failures that are returned as success-path
     strings instead of SDK/CLI tool errors."""
@@ -367,6 +443,8 @@ def _looks_like_tool_error(text: str) -> bool:
         parsed = None
     if _json_payload_has_error(parsed):
         return True
+    if parsed is not None:
+        return _json_text_block_has_error(parsed)
 
     lowered = stripped.lower()
     patterns = (
@@ -410,6 +488,10 @@ def _is_meaningful_anomaly(text: str) -> bool:
     if normalized in nominal_values:
         return False
     return not normalized.startswith(("no anomaly", "no anomalies", "none ", "nominal"))
+
+
+def _is_sdk_terminal_error_echo(text: str) -> bool:
+    return "Claude Code returned an error result:" in str(text)
 
 
 def _record_anomaly(reply: str, agent_name: str) -> None:
@@ -488,21 +570,25 @@ async def _run_agent(
             # some Anthropic-compatible adapters (z.ai/GLM) emit instead. Inspect
             # BOTH so a string-wrapped failure can't vanish unlogged again.
             if isinstance(msg.content, str):
-                text = msg.content
+                text, player_messages = _result_text_and_player_messages(msg.content)
                 if _looks_like_tool_error(text):
                     log.warning("tool_result ERROR: {}", text)
                     append_event(agent_name, "failure", _short_event_text(text))
                 elif text.strip():
                     log.info("tool_result: {}", text)
+                if player_messages:
+                    log.info("player_messages: {}", player_messages)
             else:
                 for block in msg.content:
                     if isinstance(block, ToolResultBlock):
-                        text = _result_text(block.content)
+                        text, player_messages = _result_text_and_player_messages(block.content)
                         if block.is_error or _looks_like_tool_error(text):
                             log.warning("tool_result ERROR: {}", text)
                             append_event(agent_name, "failure", _short_event_text(text))
                         else:
                             log.info("tool_result: {}", text)
+                        if player_messages:
+                            log.info("player_messages: {}", player_messages)
         elif isinstance(msg, ResultMessage):
             new_session_id = msg.session_id or new_session_id
             if msg.result and msg.result not in text_parts:
@@ -633,8 +719,11 @@ def handle_message(
         return session_id
     except Exception as e:
         error_msg = f"Error: {e}"
-        log.exception("agent invocation failed")
-        append_event(agent_name, "failure", _short_event_text(str(e)))
+        if _is_sdk_terminal_error_echo(str(e)):
+            log.warning("agent invocation ended after SDK terminal result: {}", e)
+        else:
+            log.exception("agent invocation failed")
+            append_event(agent_name, "failure", _short_event_text(str(e)))
         emit_error(telemetry, error_msg, agent=tname)
         if player_index > 0:
             send_response(rcon, player_index, rcon_target, error_msg)

@@ -1,7 +1,7 @@
 //! Shared parsing utilities for CLI coordinate and direction arguments
 
-use anyhow::Result;
 use crate::world::{Area, Direction, Position, TileArea, TilePos};
+use anyhow::Result;
 
 /// Parse integer tile coordinates from "x,y" format
 pub fn parse_tile(s: &str) -> Result<TilePos> {
@@ -10,14 +10,12 @@ pub fn parse_tile(s: &str) -> Result<TilePos> {
         anyhow::bail!("Tile position must be x,y (integers), got '{}'", s);
     }
 
-    let x: i32 = parts[0]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim()))?;
-    let y: i32 = parts[1]
-        .trim()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim()))?;
+    let x: i32 = parts[0].trim().parse().map_err(|_| {
+        anyhow::anyhow!("X coordinate must be an integer, got '{}'", parts[0].trim())
+    })?;
+    let y: i32 = parts[1].trim().parse().map_err(|_| {
+        anyhow::anyhow!("Y coordinate must be an integer, got '{}'", parts[1].trim())
+    })?;
 
     Ok(TilePos::new(x, y))
 }
@@ -48,13 +46,21 @@ pub fn parse_tile_area(s: &str) -> Result<TileArea> {
         anyhow::bail!("Tile area must be x1,y1,x2,y2 (integers), got '{}'", s);
     }
 
-    let x1: i32 = parts[0].trim().parse()
+    let x1: i32 = parts[0]
+        .trim()
+        .parse()
         .map_err(|_| anyhow::anyhow!("x1 must be an integer, got '{}'", parts[0].trim()))?;
-    let y1: i32 = parts[1].trim().parse()
+    let y1: i32 = parts[1]
+        .trim()
+        .parse()
         .map_err(|_| anyhow::anyhow!("y1 must be an integer, got '{}'", parts[1].trim()))?;
-    let x2: i32 = parts[2].trim().parse()
+    let x2: i32 = parts[2]
+        .trim()
+        .parse()
         .map_err(|_| anyhow::anyhow!("x2 must be an integer, got '{}'", parts[2].trim()))?;
-    let y2: i32 = parts[3].trim().parse()
+    let y2: i32 = parts[3]
+        .trim()
+        .parse()
         .map_err(|_| anyhow::anyhow!("y2 must be an integer, got '{}'", parts[3].trim()))?;
 
     Ok(TileArea::new(x1, y1, x2, y2))
@@ -67,13 +73,21 @@ pub fn parse_area(s: &str) -> Result<Area> {
         anyhow::bail!("Area must be x1,y1,x2,y2 (numbers), got '{}'", s);
     }
 
-    let x1: f64 = parts[0].trim().parse()
+    let x1: f64 = parts[0]
+        .trim()
+        .parse()
         .map_err(|_| anyhow::anyhow!("x1 must be a number, got '{}'", parts[0].trim()))?;
-    let y1: f64 = parts[1].trim().parse()
+    let y1: f64 = parts[1]
+        .trim()
+        .parse()
         .map_err(|_| anyhow::anyhow!("y1 must be a number, got '{}'", parts[1].trim()))?;
-    let x2: f64 = parts[2].trim().parse()
+    let x2: f64 = parts[2]
+        .trim()
+        .parse()
         .map_err(|_| anyhow::anyhow!("x2 must be a number, got '{}'", parts[2].trim()))?;
-    let y2: f64 = parts[3].trim().parse()
+    let y2: f64 = parts[3]
+        .trim()
+        .parse()
         .map_err(|_| anyhow::anyhow!("y2 must be a number, got '{}'", parts[3].trim()))?;
 
     Ok(Area::new(x1, y1, x2, y2))
@@ -81,11 +95,12 @@ pub fn parse_area(s: &str) -> Result<Area> {
 
 /// Parse direction from CLI input (name like "n"/"north" or number 0-7)
 pub fn parse_direction(s: &str) -> Result<Direction> {
-    Direction::parse(s)
-        .ok_or_else(|| anyhow::anyhow!(
+    Direction::parse(s).ok_or_else(|| {
+        anyhow::anyhow!(
             "Invalid direction '{}'. Use: n/e/s/w, north/east/south/west, or 0-7",
             s
-        ))
+        )
+    })
 }
 
 #[cfg(test)]

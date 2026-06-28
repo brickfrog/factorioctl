@@ -1,8 +1,8 @@
 //! Belt gap detection for finding breaks in belt networks
 
-use std::collections::HashMap;
-use crate::world::{Entity, TilePos};
 use super::{BeltGap, BeltGapResult, BeltGraph, GapType};
+use crate::world::{Entity, TilePos};
+use std::collections::HashMap;
 
 /// Analyze belt network for gaps (missing, misaligned, or blocked connections)
 pub fn find_belt_gaps(graph: &BeltGraph, all_entities: &[Entity]) -> BeltGapResult {
@@ -123,7 +123,11 @@ mod tests {
         // Belt at (0,0) has gap, belt at (2,0) has endpoint gap
         assert_eq!(result.gap_count, 2);
 
-        let gap_0 = result.gaps.iter().find(|g| g.from == TilePos::new(0, 0)).unwrap();
+        let gap_0 = result
+            .gaps
+            .iter()
+            .find(|g| g.from == TilePos::new(0, 0))
+            .unwrap();
         assert_eq!(gap_0.gap_type, GapType::Missing);
         assert_eq!(gap_0.to, TilePos::new(1, 0));
     }
@@ -139,7 +143,11 @@ mod tests {
         let result = find_belt_gaps(&graph, &entities);
 
         // Belt at (0,0) outputs to (1,0) but belt there faces wrong way
-        let gap = result.gaps.iter().find(|g| g.from == TilePos::new(0, 0)).unwrap();
+        let gap = result
+            .gaps
+            .iter()
+            .find(|g| g.from == TilePos::new(0, 0))
+            .unwrap();
         assert_eq!(gap.gap_type, GapType::Misaligned);
     }
 
@@ -153,7 +161,11 @@ mod tests {
         let graph = BeltGraph::from_entities(&entities);
         let result = find_belt_gaps(&graph, &entities);
 
-        let gap = result.gaps.iter().find(|g| g.from == TilePos::new(0, 0)).unwrap();
+        let gap = result
+            .gaps
+            .iter()
+            .find(|g| g.from == TilePos::new(0, 0))
+            .unwrap();
         assert_eq!(gap.gap_type, GapType::Blocked);
         assert_eq!(gap.blocker, Some("stone-furnace".to_string()));
     }

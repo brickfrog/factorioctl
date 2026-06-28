@@ -53,6 +53,21 @@ STARTER_SKILLS = [
         ],
         "outcome": "lab consumes science packs and advances research",
     },
+    {
+        "name": "build_steam_power",
+        "params": ["water_pos", "target_pos"],
+        "steps": [
+            "get_recipes_for_item for offshore-pump, boiler, and steam-engine before guessing recipe names",
+            "craft offshore-pump, boiler, steam-engine, small-electric-pole, and pipe as needed",
+            "find_entity_placements for offshore-pump near water_pos and choose an allowed candidate",
+            "check_placement for the selected offshore-pump, boiler, and steam-engine positions with explicit directions",
+            "place_entity offshore-pump, boiler, and steam-engine in a connected water-to-steam chain",
+            "connect small-electric-pole coverage from the steam engine to target_pos",
+            "insert_items fuel into the boiler",
+            "verify_production for powered labs or power network status",
+        ],
+        "outcome": "steam engine produces electricity and powers the target",
+    },
 ]
 
 

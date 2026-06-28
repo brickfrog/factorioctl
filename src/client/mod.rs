@@ -692,6 +692,31 @@ end
         Ok(entity)
     }
 
+    pub async fn check_entity_placement(
+        &mut self,
+        entity_name: &str,
+        position: Position,
+        direction: Direction,
+    ) -> Result<serde_json::Value> {
+        let lua =
+            LuaCommand::check_entity_placement(&self.agent_id, entity_name, position, direction);
+        let response = self.execute_lua(&lua).await?;
+        Ok(serde_json::from_str(&response)?)
+    }
+
+    pub async fn find_entity_placements(
+        &mut self,
+        entity_name: &str,
+        center: Position,
+        radius: u32,
+        limit: u32,
+    ) -> Result<serde_json::Value> {
+        let lua =
+            LuaCommand::find_entity_placements(&self.agent_id, entity_name, center, radius, limit);
+        let response = self.execute_lua(&lua).await?;
+        Ok(serde_json::from_str(&response)?)
+    }
+
     /// Place a ghost entity (for planning, doesn't require items)
     pub async fn place_ghost(
         &mut self,
@@ -1758,8 +1783,9 @@ mod tests {
 
     #[test]
     fn populated_lua_array_still_deserializes() {
-        let parsed = parse_lua_array::<serde_json::Value>(r#"[{"name":"grass-1"},{"name":"water"}]"#)
-            .expect("a real array must still deserialize");
+        let parsed =
+            parse_lua_array::<serde_json::Value>(r#"[{"name":"grass-1"},{"name":"water"}]"#)
+                .expect("a real array must still deserialize");
         assert_eq!(parsed.len(), 2);
     }
 }

@@ -3,11 +3,11 @@
 //! Traces belt networks upstream to identify all entities that can
 //! place items onto a belt, including handling of circular loops.
 
-use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
-use crate::world::{Direction, Entity, TilePos};
 use super::BeltGraph;
+use crate::world::{Direction, Entity, TilePos};
 
 /// Type of entity that can be a source of items on a belt
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,7 +91,14 @@ pub fn trace_belt_sources(
 
     // Collect all belt positions that feed into origin (upstream traversal)
     let mut upstream_belts: HashSet<TilePos> = HashSet::new();
-    collect_upstream_belts(origin, graph, &mut visited, &mut path, &mut loop_path, &mut upstream_belts);
+    collect_upstream_belts(
+        origin,
+        graph,
+        &mut visited,
+        &mut path,
+        &mut loop_path,
+        &mut upstream_belts,
+    );
 
     let is_loop = loop_path.is_some();
 
@@ -186,7 +193,14 @@ fn collect_upstream_belts(
 
     // Recursively visit upstream belts
     for upstream_pos in graph.upstream_of(&pos) {
-        collect_upstream_belts(*upstream_pos, graph, visited, path, loop_path, upstream_belts);
+        collect_upstream_belts(
+            *upstream_pos,
+            graph,
+            visited,
+            path,
+            loop_path,
+            upstream_belts,
+        );
     }
 
     path.pop();
@@ -249,7 +263,7 @@ fn find_sources_for_belt(
                             unit_number: entity.unit_number,
                             target_lane: lane,
                             possible_items: vec![], // Would need inventory analysis
-                            pickup_from: None, // Would need recursive lookup
+                            pickup_from: None,      // Would need recursive lookup
                         });
                     }
                 }
@@ -366,19 +380,43 @@ fn determine_output_lane(
     match belt_direction {
         Direction::North => {
             // Belt going north (up), left is west (-x), right is east (+x)
-            if dx < 0 { Some(1) } else if dx > 0 { Some(2) } else { None }
+            if dx < 0 {
+                Some(1)
+            } else if dx > 0 {
+                Some(2)
+            } else {
+                None
+            }
         }
         Direction::East => {
             // Belt going east (right), left is north (-y), right is south (+y)
-            if dy < 0 { Some(1) } else if dy > 0 { Some(2) } else { None }
+            if dy < 0 {
+                Some(1)
+            } else if dy > 0 {
+                Some(2)
+            } else {
+                None
+            }
         }
         Direction::South => {
             // Belt going south (down), left is east (+x), right is west (-x)
-            if dx > 0 { Some(1) } else if dx < 0 { Some(2) } else { None }
+            if dx > 0 {
+                Some(1)
+            } else if dx < 0 {
+                Some(2)
+            } else {
+                None
+            }
         }
         Direction::West => {
             // Belt going west (left), left is south (+y), right is north (-y)
-            if dy > 0 { Some(1) } else if dy < 0 { Some(2) } else { None }
+            if dy > 0 {
+                Some(1)
+            } else if dy < 0 {
+                Some(2)
+            } else {
+                None
+            }
         }
         _ => None, // Diagonal directions not typically used for belts
     }

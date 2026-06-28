@@ -1,7 +1,7 @@
 //! Belt graph data structure for connectivity analysis
 
-use std::collections::HashMap;
 use crate::world::{Direction, Entity, TilePos};
+use std::collections::HashMap;
 
 /// A belt entity with connectivity information
 #[derive(Debug, Clone)]
@@ -26,8 +26,10 @@ impl BeltNode {
     /// Get side-loading input tiles (perpendicular to belt direction)
     pub fn side_input_tiles(&self) -> [TilePos; 2] {
         [
-            self.position.offset_in_direction(self.direction.rotate_ccw()),
-            self.position.offset_in_direction(self.direction.rotate_cw()),
+            self.position
+                .offset_in_direction(self.direction.rotate_ccw()),
+            self.position
+                .offset_in_direction(self.direction.rotate_cw()),
         ]
     }
 }
@@ -110,7 +112,10 @@ impl BeltGraph {
 
     /// Get downstream neighbors (where items flow to)
     pub fn downstream_of(&self, pos: &TilePos) -> &[TilePos] {
-        self.downstream.get(pos).map(|v| v.as_slice()).unwrap_or(&[])
+        self.downstream
+            .get(pos)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Get upstream neighbors (where items come from)

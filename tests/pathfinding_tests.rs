@@ -134,7 +134,9 @@ fn run_fixture_tests(fixture_name: &str) {
                 assert!(
                     result.belt_count >= min,
                     "Test '{}': expected at least {} belts, got {}",
-                    test_case.name, min, result.belt_count
+                    test_case.name,
+                    min,
+                    result.belt_count
                 );
             }
 
@@ -143,7 +145,9 @@ fn run_fixture_tests(fixture_name: &str) {
                 assert!(
                     result.turn_count >= min,
                     "Test '{}': expected at least {} turns, got {}",
-                    test_case.name, min, result.turn_count
+                    test_case.name,
+                    min,
+                    result.turn_count
                 );
             }
         } else {
@@ -153,7 +157,9 @@ fn run_fixture_tests(fixture_name: &str) {
                 assert!(
                     error.contains(expected_error),
                     "Test '{}': expected error containing '{}', got '{}'",
-                    test_case.name, expected_error, error
+                    test_case.name,
+                    expected_error,
+                    error
                 );
             }
         }
@@ -190,7 +196,9 @@ fn test_visualize_path_around_furnace() {
     assert!(result.success, "Expected path to be found");
 
     // Collect blocked positions for validation
-    let blocked: std::collections::HashSet<_> = fixture.blocked.iter()
+    let blocked: std::collections::HashSet<_> = fixture
+        .blocked
+        .iter()
         .flat_map(|b| match b {
             BlockedSpec::Simple(pos) => vec![*pos],
             BlockedSpec::Verbose { pos, .. } => pos.clone(),
@@ -205,7 +213,8 @@ fn test_visualize_path_around_furnace() {
         assert!(
             !blocked.contains(&(x, y)),
             "Path goes through blocked tile ({}, {})",
-            x, y
+            x,
+            y
         );
     }
 

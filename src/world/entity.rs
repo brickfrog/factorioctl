@@ -126,6 +126,10 @@ pub struct CraftResult {
     /// Error message if failed
     #[serde(default)]
     pub error: Option<String>,
+
+    /// Recipe requested by the caller
+    #[serde(default)]
+    pub recipe: Option<String>,
 }
 
 /// An item in an inventory

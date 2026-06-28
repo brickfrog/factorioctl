@@ -38,7 +38,11 @@ pub enum ConfigSubcommand {
 
 pub async fn execute(cmd: ConfigCommand) -> Result<()> {
     match cmd.command {
-        ConfigSubcommand::Set { host, port, password } => {
+        ConfigSubcommand::Set {
+            host,
+            port,
+            password,
+        } => {
             let mut config = Config::load().unwrap_or_default();
             if let Some(h) = host {
                 config.host = Some(h);
@@ -56,8 +60,21 @@ pub async fn execute(cmd: ConfigCommand) -> Result<()> {
             let config = Config::load()?;
             println!("Config file: {}", Config::path().display());
             println!("Host: {}", config.host.as_deref().unwrap_or("(not set)"));
-            println!("Port: {}", config.port.map(|p| p.to_string()).unwrap_or_else(|| "(not set)".to_string()));
-            println!("Password: {}", if config.password.is_some() { "(set)" } else { "(not set)" });
+            println!(
+                "Port: {}",
+                config
+                    .port
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "(not set)".to_string())
+            );
+            println!(
+                "Password: {}",
+                if config.password.is_some() {
+                    "(set)"
+                } else {
+                    "(not set)"
+                }
+            );
         }
         ConfigSubcommand::Clear => {
             Config::clear()?;

@@ -3,11 +3,11 @@
 //! Sushi belts are belts that carry multiple item types, either intentionally
 //! (for compact designs) or accidentally (mixing in the wrong items).
 
-use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
-use crate::world::{BeltLaneContentsResult, TilePos};
 use super::BeltGraph;
+use crate::world::{BeltLaneContentsResult, TilePos};
 
 /// Classification of how items are mixed on a belt
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,8 +69,18 @@ pub fn detect_sushi_belts(
     let mut empty_count = 0u32;
 
     for belt in &lane_contents.belts {
-        let left_items: Vec<String> = belt.left_lane.items.iter().map(|i| i.name.clone()).collect();
-        let right_items: Vec<String> = belt.right_lane.items.iter().map(|i| i.name.clone()).collect();
+        let left_items: Vec<String> = belt
+            .left_lane
+            .items
+            .iter()
+            .map(|i| i.name.clone())
+            .collect();
+        let right_items: Vec<String> = belt
+            .right_lane
+            .items
+            .iter()
+            .map(|i| i.name.clone())
+            .collect();
 
         let mix_type = classify_belt_mix(&left_items, &right_items);
 
@@ -215,10 +225,7 @@ mod tests {
     #[test]
     fn test_classify_pure_both_lanes() {
         assert_eq!(
-            classify_belt_mix(
-                &["iron-ore".to_string()],
-                &["iron-ore".to_string()]
-            ),
+            classify_belt_mix(&["iron-ore".to_string()], &["iron-ore".to_string()]),
             BeltMixType::Pure
         );
     }
@@ -226,10 +233,7 @@ mod tests {
     #[test]
     fn test_classify_lane_separated() {
         assert_eq!(
-            classify_belt_mix(
-                &["iron-ore".to_string()],
-                &["copper-ore".to_string()]
-            ),
+            classify_belt_mix(&["iron-ore".to_string()], &["copper-ore".to_string()]),
             BeltMixType::LaneSeparated
         );
     }
@@ -237,10 +241,7 @@ mod tests {
     #[test]
     fn test_classify_sushi() {
         assert_eq!(
-            classify_belt_mix(
-                &["iron-ore".to_string(), "copper-ore".to_string()],
-                &[]
-            ),
+            classify_belt_mix(&["iron-ore".to_string(), "copper-ore".to_string()], &[]),
             BeltMixType::Sushi
         );
         assert_eq!(
