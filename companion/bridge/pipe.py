@@ -1120,8 +1120,8 @@ class AgentThread:
                 "params: ore_belt_pos, furnace_count\n"
                 "steps:\n"
                 "- place N stone furnaces in a column\n"
-                "- route the ore belt past them and add input inserters\n"
-                "- add output inserters to a plates belt\n"
+                "- route the ore belt past them and add input burner-inserters\n"
+                "- add output burner-inserters to a plates belt\n"
                 "outcome: iron/copper plates on the output belt\n"
                 "</skill>"
             )
