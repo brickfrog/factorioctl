@@ -101,7 +101,9 @@ def setup_logging(log_dir: Path) -> Path | None:
         return None
 
 
-from rcon import RCONClient, ThreadSafeRCON
+from ledger import (apply_ledger_update, load_ledger, render_ledger,
+                    strip_ledger_trailer)
+from rcon import RCONClient, ThreadSafeRCON, lua_long_string
 from paths import find_script_output, find_factorioctl_mcp
 from transport import (InputWatcher, send_response, send_tool_status, set_status,
                        check_mod_loaded, register_agent, unregister_agent,
@@ -465,6 +467,8 @@ def handle_message(
     # Send response — join all text parts so intermediate messages aren't lost
     reply = "\n\n".join(text_parts) if text_parts else "(action complete)"
     reply = sanitize_response(reply)
+    apply_ledger_update(agent_name, reply)
+    reply = strip_ledger_trailer(reply)
 
     print(f"[{tname}] {reply}\n")
     sections = parse_response(reply)
@@ -548,13 +552,22 @@ def discover_agents(group: str | None = None, names: list[str] | None = None) ->
 # player_index=0 so it skips the in-game "Thinking..." GUI status flicker.
 AUTONOMY_PROMPT = (
     "(autonomy tick — no new messages from the player) "
-    "You're playing Factorio on your own initiative right now. Check your "
-    "current situation (position, inventory, surroundings, and what you were "
-    "doing) and take your next concrete actions toward your goals using your "
-    "tools — actually do things, don't just describe them. Narrate as you go "
-    "with broadcast_thought so the stream stays lively. If you just finished an "
-    "objective, pick a sensible next one (gather, expand, automate, research) "
-    "and keep making progress."
+    "You're playing Factorio on your own initiative right now. Prioritize "
+    "continuity: continue your current committed objective and plan, then "
+    "execute the next incomplete step with your tools. Do not re-scan areas "
+    "you already inspected, and do not restart the plan. Finish before you "
+    "switch: choose a new objective only when the current one is genuinely "
+    "finished or impossible. Actually do things, don't just describe them. "
+    "Narrate as you go with broadcast_thought so the stream stays lively. "
+    "Whenever your objective or plan changes, or after meaningful progress, "
+    "emit exactly one ledger block at the end of your reply in this format:\n"
+    "<ledger>\n"
+    "objective: your current objective\n"
+    "plan:\n"
+    "- next concrete step\n"
+    "- following concrete step\n"
+    "progress: one short note about what changed\n"
+    "</ledger>"
 )
 
 
@@ -613,6 +626,21 @@ class AgentThread:
         except Exception:
             return False
 
+    def _live_state_line(self) -> str:
+        """Best-effort one-line live state for autonomy ticks."""
+        try:
+            agent = lua_long_string(self.agent_name)
+            lua = (
+                f'local c = remote.call("claude_interface", "get_character", {agent}) '
+                'if c and c.valid then '
+                'rcon.print("Live state: " .. c.surface.name .. " @ " .. '
+                'string.format("%.1f,%.1f", c.position.x, c.position.y)) '
+                'end'
+            )
+            return self.rcon.execute(f"/silent-command {lua}").strip()
+        except Exception:
+            return ""
+
     def _next_message(self) -> dict:
         """Block for the next human message, or synthesize an autonomy tick if
         the agent has been idle for heartbeat_interval seconds. When
@@ -631,8 +659,14 @@ class AgentThread:
                         self._waiting_for_player_logged = True
                     continue
                 self._waiting_for_player_logged = False
+                prompt_parts = [
+                    render_ledger(load_ledger(self.agent_name)),
+                    self._live_state_line(),
+                    AUTONOMY_PROMPT,
+                ]
+                prompt = "\n\n".join(part for part in prompt_parts if part)
                 return {
-                    "message": AUTONOMY_PROMPT,
+                    "message": prompt,
                     "player_index": 0,
                     "player_name": "autonomy",
                     "autonomy": True,
