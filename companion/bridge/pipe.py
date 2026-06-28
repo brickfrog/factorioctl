@@ -542,11 +542,28 @@ def discover_agents(group: str | None = None, names: list[str] | None = None) ->
     return profiles
 
 
+# Self-prompt fed to the agent when it has been idle (no human message) for
+# heartbeat_interval seconds. This is what makes the agent autonomous: it keeps
+# playing on its own initiative between human messages. Injected as
+# player_index=0 so it skips the in-game "Thinking..." GUI status flicker.
+AUTONOMY_PROMPT = (
+    "(autonomy tick — no new messages from the player) "
+    "You're playing Factorio on your own initiative right now. Check your "
+    "current situation (position, inventory, surroundings, and what you were "
+    "doing) and take your next concrete actions toward your goals using your "
+    "tools — actually do things, don't just describe them. Narrate as you go "
+    "with broadcast_thought so the stream stays lively. If you just finished an "
+    "objective, pick a sensible next one (gather, expand, automate, research) "
+    "and keep making progress."
+)
+
+
 class AgentThread:
     """Manages one agent's claude CLI sessions in a dedicated thread."""
 
     def __init__(self, agent: dict, mcp_config: Path | None, rcon,
-                 telemetry: 'Telemetry | None', model: str | None):
+                 telemetry: 'Telemetry | None', model: str | None,
+                 heartbeat_interval: float = 0.0):
         self.agent = agent
         self.agent_name = agent["name"]
         self.system_prompt = agent["system_prompt"]
@@ -556,6 +573,13 @@ class AgentThread:
         self.mcp_config = mcp_config
         self.rcon = rcon
         self.telemetry = telemetry
+        # Autonomy: when no human message arrives within heartbeat_interval
+        # seconds, the agent prompts itself to keep playing. <= 0 disables
+        # autonomy (agent acts only in response to chat). A profile may
+        # override via agent["heartbeat_interval"].
+        self.heartbeat_interval = float(
+            agent.get("heartbeat_interval", heartbeat_interval)
+        )
         self.session_id = load_session(self.agent_name)
         self.inbox: queue.Queue = queue.Queue()
         self._thread = threading.Thread(
@@ -568,9 +592,26 @@ class AgentThread:
     def enqueue(self, msg: dict):
         self.inbox.put(msg)
 
+    def _next_message(self) -> dict:
+        """Block for the next human message, or synthesize an autonomy tick if
+        the agent has been idle for heartbeat_interval seconds."""
+        if self.heartbeat_interval <= 0:
+            return self.inbox.get()
+        try:
+            return self.inbox.get(timeout=self.heartbeat_interval)
+        except queue.Empty:
+            return {
+                "message": AUTONOMY_PROMPT,
+                "player_index": 0,
+                "player_name": "autonomy",
+                "autonomy": True,
+            }
+
     def _run(self):
         while True:
-            msg = self.inbox.get()
+            msg = self._next_message()
+            if msg.get("autonomy"):
+                print(f"[{_ts()}] {self.agent_name} autonomy tick")
             player_index = msg.get("player_index", 1)
             player_name = msg.get("player_name", "Player")
             message = msg["message"]
@@ -663,7 +704,8 @@ def main_multi(args, agent_profiles: list[dict]):
                 mcp_bin, args.rcon_host, args.rcon_port,
                 args.rcon_password, agent_id=agent["name"],
             )
-        at = AgentThread(agent, mcp_config, rcon, telemetry, args.model)
+        at = AgentThread(agent, mcp_config, rcon, telemetry, args.model,
+                         heartbeat_interval=args.heartbeat_interval)
         agents[agent["name"]] = at
 
     # Resolve paths and start watcher
@@ -760,6 +802,9 @@ def main():
     parser.add_argument("--model", default=None, help="Claude model (e.g. sonnet, opus, haiku)")
     parser.add_argument("--max-turns", type=int, default=None, help="Max tool-use turns per message")
     parser.add_argument("--poll-interval", type=float, default=0.5)
+    parser.add_argument("--heartbeat-interval", type=float, default=6.0,
+                        help="Autonomy: seconds idle before the agent self-prompts "
+                             "to keep playing. 0 disables autonomy (chat-only).")
     parser.add_argument("--factorioctl-mcp", default=None)
     parser.add_argument("--sse", action="store_true")
     parser.add_argument("--sse-port", type=int, default=8088)
