@@ -196,6 +196,55 @@ impl Outputable for crate::world::Inventory {
     }
 }
 
+impl Outputable for crate::world::SituationReport {
+    fn format_human(&self) -> String {
+        let mut lines = vec![
+            format!(
+                "Situation @ ({:.1}, {:.1}) — tick {} (radius {})",
+                self.position.x, self.position.y, self.tick, self.radius
+            ),
+            format!(
+                "  Health: {} | Walking: {}",
+                self.health
+                    .map(|h| format!("{:.0}", h))
+                    .unwrap_or_else(|| "N/A".to_string()),
+                self.walking.unwrap_or(false)
+            ),
+        ];
+        if self.inventory.is_empty() {
+            lines.push("  Inventory: empty".to_string());
+        } else {
+            let items: Vec<String> = self
+                .inventory
+                .iter()
+                .map(|i| format!("{} x{}", i.name, i.count))
+                .collect();
+            lines.push(format!("  Inventory: {}", items.join(", ")));
+        }
+        if self.nearby_entities.is_empty() {
+            lines.push("  Nearby entities: none".to_string());
+        } else {
+            let ents: Vec<String> = self
+                .nearby_entities
+                .iter()
+                .map(|(name, count)| format!("{} x{}", name, count))
+                .collect();
+            lines.push(format!("  Nearby entities: {}", ents.join(", ")));
+        }
+        if self.nearby_resources.is_empty() {
+            lines.push("  Nearby resources: none".to_string());
+        } else {
+            for r in &self.nearby_resources {
+                lines.push(format!(
+                    "  Resource {} at ({:.1}, {:.1}): {} ({} tiles)",
+                    r.name, r.center_x, r.center_y, r.total_amount, r.tile_count
+                ));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
 impl Outputable for crate::world::MineResult {
     fn format_human(&self) -> String {
         if !self.success {

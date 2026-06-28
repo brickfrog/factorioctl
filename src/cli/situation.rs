@@ -3,7 +3,8 @@
 use anyhow::Result;
 use clap::Args;
 
-use super::{OutputFormat, ResolvedConnectionArgs};
+use super::ResolvedConnectionArgs;
+use crate::output::Output;
 use crate::world::{Area, Position, build_situation_report};
 
 #[derive(Args, Debug)]
@@ -39,10 +40,7 @@ pub async fn execute(cmd: SituationCommand, conn: &ResolvedConnectionArgs) -> Re
         radius,
     );
 
-    let rendered = match conn.output {
-        OutputFormat::Human | OutputFormat::Json => serde_json::to_string_pretty(&report)?,
-    };
-    println!("{}", rendered);
+    Output::new(conn.output).print(&report)?;
 
     client.close().await?;
     Ok(())
