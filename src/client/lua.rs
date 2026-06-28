@@ -3048,9 +3048,13 @@ mod tests {
         assert!(!lua.contains("handler_registered"));
         assert!(lua.contains("storage.factorioctl_chat"));
         assert!(lua.contains("messages = {}"));
-        assert!(
-            lua.lines().all(|line| !line.trim_start().contains(" -- ")),
-            "Lua command must not contain inline -- comments"
-        );
+        for line in lua.lines() {
+            if let Some(idx) = line.find("--") {
+                assert!(
+                    line[..idx].trim().is_empty(),
+                    "inline -- comment after code: {line}"
+                );
+            }
+        }
     }
 }
