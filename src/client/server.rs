@@ -334,6 +334,22 @@ mod tests {
         std::fs::create_dir_all(&saves_dir).unwrap();
         let mut child = Command::new("sleep").arg("30").spawn().unwrap();
         let pid = child.id().unwrap();
+
+        // Immediately after fork() the child inherits the parent's
+        // /proc/<pid>/cmdline (the test binary is `factorioctl-<hash>`, which
+        // contains "factorio") until exec() replaces it with `sleep`. Reading
+        // it during that window would misclassify the sleep process as a live
+        // Factorio server and make this test flaky. Wait for exec() to land.
+        let mut waited_ms = 0;
+        while factorio_server_running(pid) && waited_ms < 2000 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            waited_ms += 10;
+        }
+        assert!(
+            !factorio_server_running(pid),
+            "sleep child still looks like factorio after exec window"
+        );
+
         let pidfile = saves_dir.join(".factorioctl-server.pid");
         std::fs::write(&pidfile, pid.to_string()).unwrap();
         let mut manager = manager_for(saves_dir);
