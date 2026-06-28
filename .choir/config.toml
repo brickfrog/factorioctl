@@ -1,2 +1,0 @@
-[project]
-verify_cmd = "cargo test"

@@ -21,17 +21,9 @@ logs/
 # Headless server data (separate from Steam client)
 .factorio-server-data/
 
-# Beads / Dolt files (added by bd init)
+# Orchestration state — never tracked (no audit-receipt / bead-export commits)
+/.choir/
+/.beads/
 .dolt/
 *.db
 .beads-credential-key
-
-# === BEGIN choir-tracking (allowlist: ignore server runtime, keep durable artifacts) ===
-/.choir/*
-!/.choir/config.toml
-!/.choir/context/
-!/.choir/state/
-/.choir/state/*
-!/.choir/state/audit-gate.json
-!/.choir/state/audit-receipts/
-# === END choir-tracking ===
