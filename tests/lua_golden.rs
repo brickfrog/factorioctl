@@ -12,10 +12,6 @@ impl LuaCase {
         Self { name, lua }
     }
 
-    fn assert_snapshot(&self, expected: &str) {
-        assert_eq!(self.lua, expected, "Lua snapshot changed for {}", self.name);
-    }
-
     fn assert_invariants(&self) {
         assert_no_same_line_trailing_comments(self.name, &self.lua);
         assert_balanced_double_quotes(self.name, &self.lua);
@@ -50,6 +46,10 @@ fn all_lua_cases() -> Vec<LuaCase> {
             ),
         ),
         LuaCase::new("get_entity", LuaCommand::get_entity(42)),
+        LuaCase::new(
+            "get_entity_drop_position",
+            LuaCommand::get_entity_drop_position(42),
+        ),
         LuaCase::new("get_entity_inventory", LuaCommand::get_entity_inventory(42)),
         LuaCase::new(
             "find_resources",
@@ -81,7 +81,6 @@ fn all_lua_cases() -> Vec<LuaCase> {
             "walk_to_named_target",
             LuaCommand::set_walk_target(&named_agent(), pos(12.0, 13.0)),
         ),
-        LuaCase::new("walk_to_driver", LuaCommand::walk_driver_lua().to_string()),
         LuaCase::new(
             "character_status",
             LuaCommand::character_status(&legacy_agent()),
@@ -89,6 +88,10 @@ fn all_lua_cases() -> Vec<LuaCase> {
         LuaCase::new(
             "character_inventory",
             LuaCommand::character_inventory(&legacy_agent()),
+        ),
+        LuaCase::new(
+            "get_character_position",
+            LuaCommand::get_character_position(&legacy_agent()),
         ),
         LuaCase::new(
             "start_mining",
@@ -106,6 +109,10 @@ fn all_lua_cases() -> Vec<LuaCase> {
         LuaCase::new(
             "mine_nearest",
             LuaCommand::mine_nearest(&legacy_agent(), "iron-ore", 3),
+        ),
+        LuaCase::new(
+            "find_nearest_minable",
+            LuaCommand::find_nearest_minable(&legacy_agent(), "iron-ore", 100),
         ),
         LuaCase::new(
             "craft",
@@ -163,6 +170,28 @@ fn all_lua_cases() -> Vec<LuaCase> {
             ),
         ),
         LuaCase::new(
+            "build_drill_array",
+            LuaCommand::build_drill_array(
+                &legacy_agent(),
+                2,
+                "iron-ore",
+                Some((20.0, 21.0)),
+                "burner-mining-drill",
+                "south",
+            ),
+        ),
+        LuaCase::new(
+            "build_smelter_line",
+            LuaCommand::build_smelter_line(
+                &legacy_agent(),
+                3,
+                (22.0, 23.0),
+                "stone-furnace",
+                "east",
+                3,
+            ),
+        ),
+        LuaCase::new(
             "remove_entity_at",
             LuaCommand::remove_entity_at(pos(24.0, 25.0)),
         ),
@@ -214,12 +243,27 @@ fn all_lua_cases() -> Vec<LuaCase> {
             "get_and_clear_chat_messages",
             LuaCommand::get_and_clear_chat_messages(),
         ),
+        LuaCase::new(
+            "broadcast_console",
+            LuaCommand::broadcast_console("hello from test"),
+        ),
+        LuaCase::new(
+            "broadcast_flying_text",
+            LuaCommand::broadcast_flying_text("hello from test"),
+        ),
+        LuaCase::new("get_tick", LuaCommand::get_tick()),
+        LuaCase::new("set_tick_paused", LuaCommand::set_tick_paused(true)),
+        LuaCase::new("set_game_speed", LuaCommand::set_game_speed(1.25)),
         LuaCase::new("get_research_status", LuaCommand::get_research_status()),
         LuaCase::new(
             "get_available_research",
             LuaCommand::get_available_research(&legacy_agent()),
         ),
         LuaCase::new("start_research", LuaCommand::start_research("automation")),
+        LuaCase::new(
+            "is_tech_researched",
+            LuaCommand::is_tech_researched("automation"),
+        ),
         LuaCase::new("get_power_status", LuaCommand::get_power_status(30, 31, 10)),
         LuaCase::new(
             "get_power_networks",
@@ -238,6 +282,7 @@ fn all_lua_cases() -> Vec<LuaCase> {
             LuaCommand::get_power_coverage(36, 37, 13),
         ),
         LuaCase::new("get_alerts", LuaCommand::get_alerts(38, 39, 14)),
+        LuaCase::new("get_belt_contents", LuaCommand::get_belt_contents(area())),
         LuaCase::new(
             "get_belt_lane_contents",
             LuaCommand::get_belt_lane_contents(area()),
@@ -369,31 +414,12 @@ fn generated_lua_has_rcon_safe_syntax_invariants() {
 
 #[test]
 fn corrected_inventory_readers_document_factorio_2_get_contents_shape() {
-    for case in [
-        LuaCase::new(
-            "character_inventory",
-            LuaCommand::character_inventory(&legacy_agent()),
-        ),
-        LuaCase::new(
-            "mine_at",
-            LuaCommand::mine_at(&legacy_agent(), pos(16.0, 17.0), 2),
-        ),
-        LuaCase::new(
-            "mine_nearest",
-            LuaCommand::mine_nearest(&legacy_agent(), "iron-ore", 3),
-        ),
-        LuaCase::new(
-            "get_available_research",
-            LuaCommand::get_available_research(&legacy_agent()),
-        ),
-        LuaCase::new(
-            "clear_area",
-            LuaCommand::clear_area(&legacy_agent(), area(), true, true, false),
-        ),
-        LuaCase::new("get_entity_inventory", LuaCommand::get_entity_inventory(42)),
-    ] {
-        assert_uses_factorio_2_get_contents_shape(case.name, &case.lua);
-    }
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    assert_uses_factorio_2_get_contents_shape(
+        "control.lua get_available_research_impl",
+        control_lua,
+    );
+    assert_uses_factorio_2_get_contents_shape("control.lua clear_area_impl", control_lua);
 }
 
 fn assert_uses_transport_line_contents_shape(case_name: &str, lua: &str) {
@@ -418,14 +444,55 @@ fn assert_uses_transport_line_contents_shape(case_name: &str, lua: &str) {
 
 #[test]
 fn transport_line_readers_document_factorio_2_object_array_shape() {
+    for (name, lua, method) in [
+        (
+            "get_belt_contents",
+            LuaCommand::get_belt_contents(area()),
+            "get_belt_contents",
+        ),
+        (
+            "get_belt_lane_contents",
+            LuaCommand::get_belt_lane_contents(area()),
+            "get_belt_lane_contents",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+
+        for forbidden in [
+            "get_transport_line",
+            "get_contents()",
+            "surface.find_entities_filtered",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    assert!(
+        control_lua.contains("local function get_belt_contents_impl")
+            && control_lua.contains("get_belt_contents = function(x1, y1, x2, y2)")
+            && control_lua.contains("local function get_belt_lane_contents_impl")
+            && control_lua.contains("get_belt_lane_contents = function(x1, y1, x2, y2)"),
+        "control.lua should expose both belt contents remotes"
+    );
+    assert_uses_transport_line_contents_shape("control.lua get_belt_contents_impl", control_lua);
     assert_uses_transport_line_contents_shape(
-        "get_belt_lane_contents",
-        &LuaCommand::get_belt_lane_contents(area()),
+        "control.lua get_belt_lane_contents_impl",
+        control_lua,
     );
 }
 
 #[test]
-fn named_walk_uses_the_shared_driver_target_without_walking_state() {
+fn named_walk_routes_to_mod_target_without_host_driver_state() {
     let agent = named_agent();
     let walk_character = LuaCommand::walk_character(&agent, pos(12.0, 13.0));
     let walk_target = LuaCommand::set_walk_target(&agent, pos(12.0, 13.0));
@@ -435,25 +502,25 @@ fn named_walk_uses_the_shared_driver_target_without_walking_state() {
         ("walk_target", walk_target.as_str()),
     ] {
         assert!(
-            lua.contains(r#"storage.factorioctl_walk_targets["doug"] = { x = 12, y = 13"#),
-            "{name} should store the named agent target for the on_tick driver"
+            lua.contains(r#"remote.call("claude_interface", "set_walk_target", "doug", 12, 13)"#),
+            "{name} should route movement through the mod target backend"
         );
-        assert!(
-            !lua.contains("walking = true") && !lua.contains("walking=true"),
-            "{name} should not start named orphan agents by relying on walking_state"
-        );
+        for forbidden in [
+            "storage.factorioctl_walk_targets",
+            "walking_state",
+            "script.on_event",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} should not reintroduce host-side walk driver state {forbidden:?}"
+            );
+        }
     }
-
-    let driver = LuaCommand::walk_driver_lua();
-    assert!(
-        driver.contains("tgt.stuck_ticks") && driver.contains("tgt.expires_tick"),
-        "walk driver should clear targets after bounded no-progress/expiry guards"
-    );
 }
 
 #[test]
 fn research_readiness_counts_resolved_character_science_in_totals() {
-    let lua = LuaCommand::get_available_research(&named_agent());
+    let lua = include_str!("../companion/mod/claude-interface/control.lua");
 
     let inventory_fold = lua
         .find("science_totals[item.name] = (science_totals[item.name] or 0) + item.count")
@@ -471,261 +538,965 @@ fn research_readiness_counts_resolved_character_science_in_totals() {
 fn get_entity_inventory_uses_factorio_2_object_array_for_cjf_2() {
     let lua = LuaCommand::get_entity_inventory(42);
 
-    assert_uses_factorio_2_get_contents_shape("get_entity_inventory", &lua);
+    assert!(
+        lua.contains(r#"remote.interfaces["claude_interface"]["get_entity_inventory"]"#)
+            && lua.contains(r#"remote.call("claude_interface", "get_entity_inventory", 42)"#),
+        "get_entity_inventory should be a small guarded mod remote call:\n{lua}"
+    );
+    for forbidden in [
+        "inv.get_contents()",
+        "storage.factorioctl_entities[",
+        "surface.find_entities_filtered",
+    ] {
+        assert!(
+            !lua.contains(forbidden),
+            "get_entity_inventory Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+        );
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    assert!(
+        control_lua.contains("local function get_entity_inventory_impl")
+            && control_lua.contains("get_entity_inventory = function(unit_number)")
+            && control_lua.contains("local items = inventory_contents(inv)"),
+        "control.lua should expose the entity inventory remote and use the shared inventory reader"
+    );
+    assert_uses_factorio_2_get_contents_shape("control.lua inventory_contents", control_lua);
+}
+
+#[test]
+fn world_observation_queries_live_in_the_mod_not_rust_strings() {
+    for (name, lua, method) in [
+        ("get_surfaces", LuaCommand::get_surfaces(), "get_surfaces"),
+        (
+            "find_entities",
+            LuaCommand::find_entities(
+                area(),
+                Some("assembling-machine"),
+                Some("assembling-machine-1"),
+            ),
+            "find_entities",
+        ),
+        (
+            "verify_production",
+            LuaCommand::verify_production(area()),
+            "verify_production",
+        ),
+        ("get_entity", LuaCommand::get_entity(42), "get_entity"),
+        (
+            "get_entity_drop_position",
+            LuaCommand::get_entity_drop_position(42),
+            "get_entity_drop_position",
+        ),
+        (
+            "find_resources",
+            LuaCommand::find_resources(area(), Some("iron-ore")),
+            "find_resources",
+        ),
+        (
+            "find_nearest_resource",
+            LuaCommand::find_nearest_resource("coal", pos(1.5, 2.5)),
+            "find_nearest_resource",
+        ),
+        ("get_tiles", LuaCommand::get_tiles(area()), "get_tiles"),
+        ("get_tile", LuaCommand::get_tile(pos(7.0, 8.0)), "get_tile"),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+
+        for forbidden in [
+            "game.surfaces",
+            "find_entities_filtered",
+            "get_tile(",
+            "defines.entity_status",
+            "storage.factorioctl_entities",
+            "entity.bounding_box",
+            ".collides_with",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function entity_summary",
+        "local function get_surfaces_impl",
+        "local function find_entities_impl",
+        "local function verify_production_impl",
+        "local function get_entity_impl",
+        "local function get_entity_drop_position_impl",
+        "local function aggregate_resource_patches",
+        "local function find_resources_impl",
+        "local function find_nearest_resource_impl",
+        "local function get_tiles_impl",
+        "local function get_tile_impl",
+        "get_surfaces = function()",
+        "find_entities = function(x1, y1, x2, y2, entity_type, name)",
+        "verify_production = function(x1, y1, x2, y2)",
+        "get_entity = function(unit_number)",
+        "get_entity_drop_position = function(unit_number)",
+        "find_resources = function(x1, y1, x2, y2, resource_type)",
+        "find_nearest_resource = function(resource_name, from_x, from_y)",
+        "get_tiles = function(x1, y1, x2, y2)",
+        "get_tile = function(x, y)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua world-observation remotes should include {required:?}"
+        );
+    }
+}
+
+#[test]
+fn entity_lookup_and_drop_position_live_in_the_mod_not_rust_strings() {
+    let lua_rs = include_str!("../src/client/lua.rs");
+    assert!(
+        !lua_rs.contains("pub fn entity_lookup")
+            && !lua_rs.contains("fn register_entity")
+            && !lua_rs.contains(
+                "game.surfaces[1].find_entities_filtered{{area={{{{-500,-500}},{{500,500}}}}}}"
+            ),
+        "Rust Lua builders should not carry registry scan helpers"
+    );
+
+    let drop_lua = LuaCommand::get_entity_drop_position(42);
+    assert!(
+        drop_lua.contains(r#"remote.interfaces["claude_interface"]["get_entity_drop_position"]"#)
+            && drop_lua
+                .contains(r#"remote.call("claude_interface", "get_entity_drop_position", 42)"#),
+        "get_entity_drop_position should be a small guarded mod remote call:\n{drop_lua}"
+    );
+    for forbidden in [
+        "local dp",
+        ".drop_position",
+        "storage.factorioctl_entities",
+        "find_entities_filtered",
+        "game.table_to_json",
+    ] {
+        assert!(
+            !drop_lua.contains(forbidden),
+            "get_entity_drop_position Rust wrapper should not embed heavy Lua {forbidden:?}:\n{drop_lua}"
+        );
+    }
+
+    let mcp_rs = include_str!("../src/bin/mcp.rs");
+    assert!(
+        mcp_rs.contains("LuaCommand::get_entity_drop_position(params.unit_number)")
+            && !mcp_rs.contains("fn drill_drop_position_lua")
+            && !mcp_rs.contains("LuaCommand::entity_lookup"),
+        "MCP drill belt-position helper should call the mod remote, not build Lua locally"
+    );
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function find_entity_by_unit_number",
+        "local registered = storage.factorioctl_entities[unit_number]",
+        "local function get_entity_drop_position_impl",
+        "if not entity.drop_position then",
+        "drop_x = drop_position.x",
+        "belt_direction = direction",
+        "get_entity_drop_position = function(unit_number)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua entity lookup/drop-position remote should include {required:?}"
+        );
+    }
+}
+
+#[test]
+fn bridge_bootstrap_gameplay_lives_in_the_mod_not_python_strings() {
+    let transport_py = include_str!("../companion/bridge/transport.py");
+    for required in [
+        r#"remote.call("claude_interface", "ensure_surface""#,
+        r#"remote.call("claude_interface", "pre_place_character""#,
+    ] {
+        assert!(
+            transport_py.contains(required),
+            "bridge transport should call the mod remote {required:?}"
+        );
+    }
+    for forbidden in [
+        "game.planets",
+        "game.surfaces",
+        "create_surface",
+        "request_to_generate_chunks",
+        "force_generate_chunk_requests",
+        "create_entity",
+        "storage.factorioctl_characters",
+        "storage.factorioctl_entities",
+    ] {
+        assert!(
+            !transport_py.contains(forbidden),
+            "bridge transport should not embed gameplay Lua {forbidden:?}"
+        );
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function ensure_surface_impl",
+        "local function pre_place_character_impl",
+        "target_surface.request_to_generate_chunks({spawn_x, 0}, 4)",
+        "character = target_surface.create_entity{",
+        "remember_factorioctl_character(agent_id, character)",
+        "ensure_surface = function(planet_name)",
+        "pre_place_character = function(agent_id, planet_name, spawn_x)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua bridge bootstrap remotes should include {required:?}"
+        );
+    }
+}
+
+#[test]
+fn bridge_live_state_gameplay_lives_in_the_mod_not_python_strings() {
+    let pipe_py = include_str!("../companion/bridge/pipe.py");
+    assert!(
+        pipe_py.contains(r#"remote.call("claude_interface", "live_state_line""#),
+        "bridge live-state probe should call the mod remote"
+    );
+    assert!(
+        pipe_py.contains(r#"remote.call("claude_interface", "connected_player_count""#),
+        "bridge human-connected probe should call the mod remote"
+    );
+    for forbidden in [
+        "c.surface.find_entities_filtered",
+        "#game.connected_players",
+        "local names =",
+        "player entities:",
+        "string.format(\"%.1f,%.1f\"",
+    ] {
+        assert!(
+            !pipe_py.contains(forbidden),
+            "bridge live-state probe should not embed gameplay Lua {forbidden:?}"
+        );
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function live_state_line_impl",
+        "character.surface.find_entities_filtered{force = character.force, name = name}",
+        "\"Live state: \"",
+        "\"; player entities: \" .. table.concat(parts, \", \")",
+        "live_state_line = function(agent_id)",
+        "local function connected_player_count_impl",
+        "return #game.connected_players",
+        "connected_player_count = function()",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua live-state remote should include {required:?}"
+        );
+    }
+}
+
+#[test]
+fn broadcast_display_gameplay_lives_in_the_mod_not_cli_or_mcp_strings() {
+    let console_lua = LuaCommand::broadcast_console("hello");
+    let flying_text_lua = LuaCommand::broadcast_flying_text("hello");
+    for (name, lua, method) in [
+        (
+            "broadcast_console",
+            console_lua.as_str(),
+            "broadcast_console",
+        ),
+        (
+            "broadcast_flying_text",
+            flying_text_lua.as_str(),
+            "broadcast_flying_text",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+        for forbidden in ["game.print", "game.players[1]", "create_local_flying_text"] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} should not embed display gameplay Lua {forbidden:?}"
+            );
+        }
+    }
+
+    let say_rs = include_str!("../src/cli/say.rs");
+    let mcp_rs = include_str!("../src/bin/mcp.rs");
+    for required in [
+        "LuaCommand::broadcast_console",
+        "LuaCommand::broadcast_flying_text",
+    ] {
+        assert!(
+            say_rs.contains(required) && mcp_rs.contains(required),
+            "CLI and MCP broadcast paths should use wrapper {required:?}"
+        );
+    }
+    for forbidden in [
+        "game.print(\"[Agent]",
+        "game.players[1]",
+        "create_local_flying_text",
+    ] {
+        assert!(
+            !say_rs.contains(forbidden) && !mcp_rs.contains(forbidden),
+            "CLI/MCP broadcast paths should not embed display Lua {forbidden:?}"
+        );
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function broadcast_console_impl",
+        "game.print(\"[Agent] \" .. tostring(message or \"\"))",
+        "local function broadcast_flying_text_impl",
+        "for _, player in pairs(game.connected_players) do",
+        "player.create_local_flying_text{",
+        "broadcast_console = function(message)",
+        "broadcast_flying_text = function(message)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua broadcast remotes should include {required:?}"
+        );
+    }
+}
+
+#[test]
+fn tick_control_gameplay_lives_in_the_mod_not_rust_strings() {
+    for (name, lua, method) in [
+        ("get_tick", LuaCommand::get_tick(), "get_tick"),
+        (
+            "set_tick_paused",
+            LuaCommand::set_tick_paused(true),
+            "set_tick_paused",
+        ),
+        (
+            "set_game_speed",
+            LuaCommand::set_game_speed(1.25),
+            "set_game_speed",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+        for forbidden in ["rcon.print(game.tick)", "game.tick_paused", "game.speed"] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} should not embed tick-control gameplay Lua {forbidden:?}"
+            );
+        }
+    }
+
+    let client_mod = include_str!("../src/client/mod.rs");
+    for forbidden in [
+        "execute_lua(\"rcon.print(game.tick)\")",
+        "execute_lua(\"game.tick_paused = true\")",
+        "execute_lua(\"game.tick_paused = false\")",
+        "format!(\"game.speed = {}\"",
+    ] {
+        assert!(
+            !client_mod.contains(forbidden),
+            "FactorioClient tick control should not embed direct Lua {forbidden:?}"
+        );
+    }
+    for required in [
+        "LuaCommand::get_tick()",
+        "LuaCommand::set_tick_paused(true)",
+        "LuaCommand::set_tick_paused(false)",
+        "LuaCommand::set_game_speed(speed)",
+    ] {
+        assert!(
+            client_mod.contains(required),
+            "FactorioClient tick control should use wrapper {required:?}"
+        );
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function get_tick_impl",
+        "return {tick = game.tick}",
+        "local function set_tick_paused_impl",
+        "game.tick_paused = paused and true or false",
+        "local function set_game_speed_impl",
+        "game.speed = tonumber(speed) or game.speed",
+        "get_tick = function()",
+        "set_tick_paused = function(paused)",
+        "set_game_speed = function(speed)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua tick-control remotes should include {required:?}"
+        );
+    }
+}
+
+#[test]
+fn entity_mutation_queries_live_in_the_mod_not_rust_strings() {
+    for (name, lua, method) in [
+        (
+            "remove_entity_at",
+            LuaCommand::remove_entity_at(pos(24.0, 25.0)),
+            "remove_entity_at",
+        ),
+        (
+            "remove_entity",
+            LuaCommand::remove_entity(43),
+            "remove_entity",
+        ),
+        (
+            "rotate_entity",
+            LuaCommand::rotate_entity(44, 4),
+            "rotate_entity",
+        ),
+        (
+            "insert_items",
+            LuaCommand::insert_items(45, "coal", 5, "fuel"),
+            "insert_items",
+        ),
+        (
+            "extract_items",
+            LuaCommand::extract_items(&named_agent(), 46, "iron-ore", 6, "chest"),
+            "extract_items",
+        ),
+        (
+            "set_recipe",
+            LuaCommand::set_recipe(47, "copper-cable"),
+            "set_recipe",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+
+        for forbidden in [
+            "storage.factorioctl_entities[",
+            "find_entities_filtered",
+            "get_inventory(",
+            "get_main_inventory()",
+            "inv.insert",
+            "inv.remove",
+            "set_recipe(",
+            "e.destroy()",
+            "e.direction",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function inventory_define_for",
+        "local function find_factorioctl_character",
+        "local function remove_entity_at_impl",
+        "local function remove_entity_impl",
+        "local function rotate_entity_impl",
+        "local function insert_items_impl",
+        "local function extract_items_impl",
+        "local function set_recipe_impl",
+        "remove_entity_at = function(x, y)",
+        "remove_entity = function(unit_number)",
+        "rotate_entity = function(unit_number, direction)",
+        "insert_items = function(unit_number, item, count, inventory_type)",
+        "extract_items = function(agent_id, unit_number, item, count, inventory_type)",
+        "set_recipe = function(unit_number, recipe)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua entity mutation remotes should include {required:?}"
+        );
+    }
+
+    assert!(
+        control_lua.contains("local player_inv = character.get_main_inventory()")
+            && control_lua.contains("local character = storage.characters[agent_id]")
+            && control_lua.contains("return {extracted = 0, available = available, item = item}")
+            && control_lua
+                .contains("if type(result_or_error) == \"string\" then return result_or_error end")
+            && !control_lua.contains("\"error\": \"No items of that type in inventory\""),
+        "control.lua extraction logic should preserve the named-agent/no-items contract"
+    );
+
+    let init_lua = LuaCommand::init_character(&named_agent(), 0.0, 0.0);
+    assert!(
+        init_lua.contains(r#"remote.call("claude_interface", "init_character", "doug", 0, 0)"#),
+        "init_character should be a small guarded mod remote call:\n{init_lua}"
+    );
+    assert!(
+        control_lua.contains("local function remember_factorioctl_character")
+            && control_lua.contains("storage.characters[agent_id] = character")
+            && control_lua.contains("init_character = function(agent_id, x, y)"),
+        "control.lua init_character should populate mod character storage"
+    );
 }
 
 #[test]
 fn blueprint_commands_use_scratch_stack_without_name_only_restore() {
-    for case in [
-        LuaCase::new(
-            "create_native_blueprint",
-            LuaCommand::create_native_blueprint(&named_agent(), area()),
-        ),
-        LuaCase::new(
-            "save_blueprint",
-            LuaCommand::save_blueprint(&named_agent(), "starter", area()),
-        ),
-        LuaCase::new(
-            "place_blueprint",
-            LuaCommand::place_blueprint(&named_agent(), "starter", pos(26.0, 27.0), 4),
-        ),
-        LuaCase::new(
-            "import_blueprint",
-            LuaCommand::import_blueprint(&named_agent(), "0eNq-test", pos(28.0, 29.0), 8),
-        ),
-    ] {
-        assert!(
-            case.lua.contains("find_empty_stack") && case.lua.contains("game.create_inventory"),
-            "{} should prefer an empty player stack and fall back to a temporary scratch inventory",
-            case.name
-        );
-        assert!(
-            !case.lua.contains("local slot = inv[1]") && !case.lua.contains("saved_item"),
-            "{} should not overwrite slot 1 or restore an item by name only",
-            case.name
-        );
-    }
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    assert!(
+        control_lua.contains("local function blueprint_scratch_stack")
+            && control_lua.contains("inv.find_empty_stack(\"blueprint\")")
+            && control_lua.contains("game.create_inventory(1)")
+            && control_lua.contains("slot.set_stack{name = \"blueprint\"}")
+            && control_lua.contains("if scratch_temp_inventory then scratch_temp_inventory.destroy() end"),
+        "control.lua should prefer an empty player stack and fall back to a temporary scratch inventory"
+    );
+    assert!(
+        !control_lua.contains("local slot = inv[1]") && !control_lua.contains("saved_item"),
+        "blueprint scratch handling should not overwrite slot 1 or restore an item by name only"
+    );
 }
 
 #[test]
 fn blueprint_commands_are_agent_scoped_for_cjf_11() {
-    for case in [
-        LuaCase::new(
+    for (name, lua, method) in [
+        (
             "create_native_blueprint",
             LuaCommand::create_native_blueprint(&named_agent(), area()),
+            "create_native_blueprint",
         ),
-        LuaCase::new(
+        (
             "save_blueprint",
             LuaCommand::save_blueprint(&named_agent(), "starter", area()),
+            "save_blueprint",
         ),
-        LuaCase::new(
+        (
+            "list_blueprints",
+            LuaCommand::list_blueprints(),
+            "list_blueprints",
+        ),
+        (
+            "get_blueprint",
+            LuaCommand::get_blueprint("starter"),
+            "get_blueprint",
+        ),
+        (
             "place_blueprint",
             LuaCommand::place_blueprint(&named_agent(), "starter", pos(26.0, 27.0), 4),
+            "place_blueprint",
         ),
-        LuaCase::new(
+        (
             "import_blueprint",
             LuaCommand::import_blueprint(&named_agent(), "0eNq-test", pos(28.0, 29.0), 8),
+            "import_blueprint",
+        ),
+        (
+            "delete_blueprint",
+            LuaCommand::delete_blueprint("starter"),
+            "delete_blueprint",
         ),
     ] {
         assert!(
-            case.lua
-                .contains(r#"local c = storage.factorioctl_characters["doug"]"#),
-            "{} should resolve the named agent character",
-            case.name
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
         );
+
+        for forbidden in [
+            "storage.factorioctl_characters",
+            "game.get_player(1)",
+            "game.surfaces[1]",
+            "find_empty_stack",
+            "create_blueprint",
+            "build_blueprint",
+            "storage.blueprints",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function create_native_blueprint_impl",
+        "local function save_blueprint_impl",
+        "local function list_blueprints_impl",
+        "local function get_blueprint_impl",
+        "local function place_blueprint_impl",
+        "local function import_blueprint_impl",
+        "local function delete_blueprint_impl",
+        "create_native_blueprint = function(agent_id, x1, y1, x2, y2)",
+        "save_blueprint = function(agent_id, name, x1, y1, x2, y2)",
+        "list_blueprints = function()",
+        "get_blueprint = function(name)",
+        "place_blueprint = function(agent_id, name, x, y, direction)",
+        "import_blueprint = function(agent_id, bp_string, x, y, direction)",
+        "delete_blueprint = function(name)",
+        "local character = find_factorioctl_character(agent_id)",
+        "local inv = character.get_main_inventory()",
+        "surface = character.surface",
+        "register_blueprint_ghosts(ghosts)",
+        "return {success = false, error = \"Invalid or empty blueprint string\"}",
+    ] {
         assert!(
-            case.lua.contains("local inv = c.get_main_inventory()"),
-            "{} should use the agent character inventory",
-            case.name
-        );
-        assert!(
-            case.lua.contains("surface = c.surface")
-                || case.lua.contains("local surface = c.surface"),
-            "{} should use the agent character surface",
-            case.name
-        );
-        assert!(
-            !case.lua.contains("game.get_player(1)"),
-            "{} should not hardcode player 1",
-            case.name
-        );
-        assert!(
-            !case.lua.contains("game.surfaces[1]"),
-            "{} should not hardcode surface 1",
-            case.name
+            control_lua.contains(required),
+            "control.lua blueprint remotes should include {required:?}"
         );
     }
+    assert!(
+        !control_lua.contains("game.get_player(1)"),
+        "blueprint remotes must not hardcode player 1"
+    );
 }
 
 #[test]
-fn chat_fetch_storage_init_does_not_restore_stale_handler_flag() {
+fn chat_fetch_uses_mod_remote_without_level_storage_fallback() {
+    let register_lua = LuaCommand::register_chat_handler();
     let lua = LuaCommand::get_and_clear_chat_messages();
 
-    assert!(lua.contains("storage.factorioctl_chat = { messages = {} }"));
+    assert!(register_lua.contains(r#"remote.call("claude_interface", "chat_capture_status")"#));
+    assert!(!register_lua.contains(r#"rcon.print("registered")"#));
+    assert!(lua.contains(r#"remote.call("claude_interface", "get_chat_messages")"#));
+    assert!(!lua.contains("storage.factorioctl_chat"));
     assert!(!lua.contains("handler_registered"));
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    assert!(control_lua.contains("chat_capture_status = function()"));
+    assert!(control_lua.contains("registered = true"));
 }
 
 #[test]
 fn named_walk_poll_loop_exits_when_driver_clears_target() {
     let client_mod = include_str!("../src/client/mod.rs");
-    let lua_rs = include_str!("../src/client/lua.rs");
+    let active_lua = LuaCommand::walk_target_active(&named_agent());
 
     assert!(
         client_mod.contains("walk_target_active") && client_mod.contains("Walk target cleared"),
         "named walk_to should poll the shared driver target and exit when it has been cleared"
     );
     assert!(
-        lua_rs.contains("storage.factorioctl_walk_targets")
-            && lua_rs.contains("pub fn walk_target_active"),
-        "walk_target_active should query the shared driver target table"
+        active_lua.contains(r#"remote.call("claude_interface", "has_walk_target""#)
+            && active_lua.contains(r#"rcon.print("false")"#),
+        "walk_target_active should query the mod target backend and fail closed without it"
+    );
+    assert!(
+        !active_lua.contains("storage.factorioctl_walk_targets"),
+        "Rust should not keep a fallback walk-target table after the mod backend is required"
     );
 }
 
 #[test]
-fn inventory_and_crafting_lua_snapshots_are_stable() {
-    LuaCase::new("character_inventory", LuaCommand::character_inventory(&legacy_agent())).assert_snapshot(
-        r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
-local c = nil
-for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end
-if not c then c = storage.factorioctl_characters["__player__"] end
-if c and c.valid then
-    local inv = c.get_main_inventory()
-    local items = {}
-    local free_slots = 0
-    if inv then
-        for _, item in pairs(inv.get_contents()) do
-            table.insert(items, { name = item.name, count = item.count })
-        end
-        free_slots = inv.count_empty_stacks() or 0
-    end
-    if #items == 0 then
-        rcon.print('{"items": [], "free_slots": ' .. tostring(free_slots) .. '}')
-    else
-        rcon.print(helpers.table_to_json({ items = items, free_slots = free_slots }))
-    end
-else
-    rcon.print('{"items": [], "free_slots": 0}')
-end"#,
-    );
+fn character_and_crafting_queries_live_in_the_mod_not_rust_strings() {
+    for (name, lua, method) in [
+        (
+            "init_character",
+            LuaCommand::init_character(&named_agent(), 0.0, 0.0),
+            "init_character",
+        ),
+        (
+            "teleport_character",
+            LuaCommand::teleport_character(&named_agent(), pos(10.0, 11.0)),
+            "teleport_character",
+        ),
+        (
+            "character_status",
+            LuaCommand::character_status(&named_agent()),
+            "character_status",
+        ),
+        (
+            "character_inventory",
+            LuaCommand::character_inventory(&named_agent()),
+            "character_inventory",
+        ),
+        (
+            "get_character_position",
+            LuaCommand::get_character_position(&named_agent()),
+            "get_character_pos",
+        ),
+        (
+            "craft",
+            LuaCommand::craft(&named_agent(), "iron-gear-wheel", 4),
+            "craft",
+        ),
+        (
+            "wait_for_crafting",
+            LuaCommand::wait_for_crafting(&named_agent()),
+            "wait_for_crafting",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
 
-    LuaCase::new("craft", LuaCommand::craft(&legacy_agent(), "iron-gear-wheel", 4)).assert_snapshot(
-        r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
-local c = nil
-for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end
-if not c then c = storage.factorioctl_characters["__player__"] end
-if not (c and c.valid) then rcon.print('{"error":"no character for agent __player__; spawn first"}') return end
+        for forbidden in [
+            "storage.factorioctl_characters",
+            "game.connected_players",
+            "get_main_inventory()",
+            "begin_crafting",
+            "prototypes.recipe",
+            "crafting_queue",
+            "create_entity",
+            ".teleport(",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
+    }
 
-local recipe_name = "iron-gear-wheel"
-local count = 4
-local recipe_proto = prototypes.recipe[recipe_name]
-if not recipe_proto then
-    rcon.print(helpers.table_to_json({
-        success = false,
-        queued = 0,
-        queue_size = c.crafting_queue_size,
-        queue = {},
-        recipe = recipe_name,
-        error = "Unknown recipe"
-    }))
-    return
-end
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function remember_factorioctl_character",
+        "local function init_character_impl",
+        "local function teleport_character_impl",
+        "local function character_status_impl",
+        "local function character_inventory_impl",
+        "local function crafting_queue_summary",
+        "local function craft_impl",
+        "local function wait_for_crafting_impl",
+        "init_character = function(agent_id, x, y)",
+        "teleport_character = function(agent_id, x, y)",
+        "character_status = function(agent_id)",
+        "character_inventory = function(agent_id)",
+        "get_character_pos = function(agent_id)",
+        "craft = function(agent_id, recipe_name, count)",
+        "wait_for_crafting = function(agent_id)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua character/crafting remotes should include {required:?}"
+        );
+    }
 
-local force_recipe = c.force.recipes[recipe_name]
-if force_recipe and not force_recipe.enabled then
-    rcon.print(helpers.table_to_json({
-        success = false,
-        queued = 0,
-        queue_size = c.crafting_queue_size,
-        queue = {},
-        recipe = recipe_name,
-        error = "Recipe is disabled"
-    }))
-    return
-end
-
-local ok, crafted_or_error = pcall(function()
-    return c.begin_crafting{ recipe = recipe_name, count = count }
-end)
-if not ok then
-    rcon.print(helpers.table_to_json({
-        success = false,
-        queued = 0,
-        queue_size = c.crafting_queue_size,
-        queue = {},
-        recipe = recipe_name,
-        error = tostring(crafted_or_error)
-    }))
-    return
-end
-local crafted = crafted_or_error
-
--- Build queue info
-local queue = {}
-for i, item in pairs(c.crafting_queue) do
-    table.insert(queue, { recipe = item.recipe, count = item.count })
-end
-
-local result = {
-    success = crafted > 0,
-    queued = crafted,
-    queue_size = c.crafting_queue_size,
-    queue = queue,
-    recipe = recipe_name
-}
-if crafted <= 0 then
-    result.error = "Crafting did not start; check ingredients, recipe category, or character craftability"
-end
-rcon.print(helpers.table_to_json(result))"#,
+    assert!(
+        control_lua.contains("storage.characters[agent_id] = character")
+            && control_lua.contains("game.surfaces[1].create_entity{")
+            && control_lua.contains("character.teleport({x, y})")
+            && control_lua.contains("items = inventory_contents(inv)")
+            && control_lua.contains("return {items = {}, free_slots = 0}")
+            && control_lua.contains("local c = find_factorioctl_character(agent_id)")
+            && control_lua.contains("return character.begin_crafting{recipe = recipe_name, count = count}")
+            && control_lua.contains(
+                "Crafting did not start; check ingredients, recipe category, or character craftability"
+            )
+            && control_lua
+                .contains("if type(result_or_error) == \"string\" then return result_or_error end"),
+        "control.lua should own character/crafting semantics and preserve return contracts"
     );
 }
 
 #[test]
-fn placement_diagnostics_are_structured_for_fluid_entities() {
-    let check = LuaCommand::check_entity_placement(
-        &legacy_agent(),
-        "offshore-pump",
-        pos(-39.0, 37.0),
-        Direction::West,
-    );
-    assert!(
-        check.contains("surface.can_place_entity")
-            && check.contains("factorio_allowed")
-            && check.contains("inventory_count")
-            && check.contains("item_in_inventory")
-            && check.contains("if can_place_or_error ~= true then")
-            && !check.contains("and nil or"),
-        "check_entity_placement should report Factorio placement and inventory diagnostics:\n{check}"
-    );
+fn placement_queries_live_in_the_mod_not_rust_strings() {
+    for (name, lua, method) in [
+        (
+            "place_entity",
+            LuaCommand::place_entity(
+                &named_agent(),
+                "steam-engine",
+                pos(-37.0, 37.0),
+                Direction::East,
+            ),
+            "place_entity",
+        ),
+        (
+            "check_entity_placement",
+            LuaCommand::check_entity_placement(
+                &named_agent(),
+                "offshore-pump",
+                pos(-39.0, 37.0),
+                Direction::West,
+            ),
+            "check_entity_placement",
+        ),
+        (
+            "find_entity_placements",
+            LuaCommand::find_entity_placements(
+                &named_agent(),
+                "offshore-pump",
+                pos(-39.0, 37.0),
+                10,
+                20,
+            ),
+            "find_entity_placements",
+        ),
+        (
+            "place_ghost",
+            LuaCommand::place_ghost(
+                &named_agent(),
+                "stone-furnace",
+                pos(22.0, 23.0),
+                Direction::West,
+            ),
+            "place_ghost",
+        ),
+        (
+            "place_underground_belt",
+            LuaCommand::place_underground_belt(
+                &named_agent(),
+                "underground-belt",
+                pos(20.0, 21.0),
+                Direction::South,
+                "output",
+            ),
+            "place_underground_belt",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
 
-    let place = LuaCommand::place_entity(
-        &legacy_agent(),
-        "steam-engine",
-        pos(-37.0, 37.0),
-        Direction::East,
-    );
-    assert!(
-        place.contains("local create_ok, created_or_error = pcall(function()")
-            && place.contains("create_entity returned nil after can_place_entity succeeded")
-            && place.contains("can_place = true")
-            && place.contains("inventory_count = inventory_count"),
-        "place_entity should explain mismatches between can_place_entity and create_entity:\n{place}"
-    );
+        for forbidden in [
+            "storage.factorioctl_characters",
+            "game.connected_players",
+            "get_main_inventory()",
+            "find_entities_filtered",
+            "can_place_entity",
+            "create_entity",
+            "create_entity returned nil after can_place_entity succeeded",
+            "table.sort(placements",
+            "build_check_type",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
+    }
 
-    let search = LuaCommand::find_entity_placements(
-        &legacy_agent(),
-        "offshore-pump",
-        pos(-39.0, 37.0),
-        10,
-        20,
-    );
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function placement_entity_result",
+        "local function placement_failure",
+        "local function clear_ground_items_for_placement",
+        "local function place_entity_impl",
+        "local function place_underground_belt_impl",
+        "local function check_entity_placement_impl",
+        "local function find_entity_placements_impl",
+        "local function place_ghost_impl",
+        "place_entity = function(agent_id, entity_name, x, y, direction)",
+        "place_underground_belt = function(agent_id, entity_name, x, y, direction, belt_type)",
+        "check_entity_placement = function(agent_id, entity_name, x, y, direction)",
+        "find_entity_placements = function(agent_id, entity_name, center_x, center_y, radius, limit)",
+        "place_ghost = function(agent_id, entity_name, x, y, direction)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua placement remotes should include {required:?}"
+        );
+    }
+
     assert!(
-        search.contains("local directions = { 0, 4, 8, 12 }")
-            && search.contains("surface.can_place_entity")
-            && search.contains("factorio_allowed = true")
-            && search.contains("table.sort(placements")
-            && search.contains("truncated = #placements > #returned"),
-        "find_entity_placements should scan all cardinal directions and return nearest candidates:\n{search}"
+        control_lua.contains("surface.can_place_entity{")
+            && control_lua.contains("surface.create_entity{")
+            && control_lua.contains("create_entity returned nil after can_place_entity succeeded")
+            && control_lua.contains("inventory_count = inv.get_item_count(entity_name)")
+            && control_lua.contains("item_in_inventory = inventory_count > 0")
+            && control_lua.contains("type = belt_type")
+            && control_lua.contains("result.belt_to_ground_type = entity.belt_to_ground_type")
+            && control_lua.contains("table.sort(placements")
+            && !control_lua.contains("and nil or"),
+        "control.lua should own placement diagnostics, scans, and create_entity contracts"
     );
+}
+
+#[test]
+fn build_helpers_live_in_the_mod_not_rust_strings() {
+    for (name, lua, method) in [
+        (
+            "build_drill_array",
+            LuaCommand::build_drill_array(
+                &named_agent(),
+                2,
+                "iron-ore",
+                Some((-37.0, 37.0)),
+                "burner-mining-drill",
+                "south",
+            ),
+            "build_drill_array",
+        ),
+        (
+            "build_smelter_line",
+            LuaCommand::build_smelter_line(
+                &named_agent(),
+                3,
+                (-25.0, 50.0),
+                "stone-furnace",
+                "east",
+                3,
+            ),
+            "build_smelter_line",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+
+        for forbidden in [
+            "storage.factorioctl_characters",
+            "game.connected_players",
+            "get_main_inventory()",
+            "find_entities_filtered",
+            "can_place_entity",
+            "create_entity",
+            "storage.factorioctl_entities",
+            "table.sort(resources",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
+    }
+
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function build_entity_result",
+        "local function direction_from_name",
+        "local function build_result",
+        "local function build_drill_array_impl",
+        "local function smelter_line_delta",
+        "local function build_smelter_line_impl",
+        "build_drill_array = function(agent_id, count, resource, near_x, near_y, drill_type, direction_name)",
+        "build_smelter_line = function(agent_id, count, start_x, start_y, furnace_type, line_direction, spacing)",
+        "surface.find_entities_filtered{",
+        "surface.can_place_entity{",
+        "surface.create_entity{",
+        "inv.get_item_count(drill_type)",
+        "inv.get_item_count(furnace_type)",
+        "storage.factorioctl_entities[entity.unit_number] = entity",
+        "smelter_line_delta(line_direction, spacing)",
+        "direction_from_name(direction_name, defines.direction.south)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua build-helper remotes should include {required:?}"
+        );
+    }
 }
 
 #[test]
@@ -753,6 +1524,61 @@ fn steam_power_diagnostic_uses_mod_remote_not_inline_lua() {
             !lua.contains(forbidden),
             "diagnose_steam_power Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
         );
+    }
+}
+
+#[test]
+fn power_diagnostics_use_mod_remote_not_inline_lua() {
+    for (name, lua, method) in [
+        (
+            "get_power_status",
+            LuaCommand::get_power_status(30, 31, 10),
+            "get_power_status",
+        ),
+        (
+            "get_power_networks",
+            LuaCommand::get_power_networks(32, 33, 11),
+            "get_power_networks",
+        ),
+        (
+            "find_power_issues",
+            LuaCommand::find_power_issues(34, 35, 12),
+            "find_power_issues",
+        ),
+        (
+            "get_power_coverage",
+            LuaCommand::get_power_coverage(36, 37, 13),
+            "get_power_coverage",
+        ),
+        (
+            "get_alerts",
+            LuaCommand::get_alerts(38, 39, 14),
+            "get_alerts",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+        assert!(
+            lua.contains("sync_or_restart_mod"),
+            "{name} should explain an out-of-date mod instead of silently falling back:\n{lua}"
+        );
+        for forbidden in [
+            "surface.find_entities_filtered",
+            "electric-pole",
+            "POWER_CONSUMER_TYPES",
+            "entity_status.no_power",
+            "No electric poles found in area",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
     }
 }
 
@@ -791,355 +1617,366 @@ fn steam_power_diagnostic_lives_in_mod_remote_interface() {
     }
 
     assert!(
-        control_lua.contains("return helpers.table_to_json(result_or_error)"),
+        control_lua.contains("local function json_remote_call")
+            && control_lua.contains(
+                r#"json_remote_call("diagnose_steam_power", diagnose_steam_power_impl, x, y, radius)"#
+            ),
         "remote diagnostic should return JSON to the RCON wrapper"
     );
 }
 
 #[test]
-fn placement_and_mining_lua_snapshots_are_stable() {
-    LuaCase::new(
-        "place_ghost",
-        LuaCommand::place_ghost(&legacy_agent(), "stone-furnace", pos(22.0, 23.0), Direction::West),
-    )
-    .assert_snapshot(
-        r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
-local c = nil
-for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end
-if not c then c = storage.factorioctl_characters["__player__"] end
-if not (c and c.valid) then rcon.print('{"error":"no character for agent __player__; spawn first"}') return end
+fn power_diagnostics_live_in_mod_remote_interface() {
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
 
--- Create ghost entity (doesn't require items in inventory)
-local e = game.surfaces[1].create_entity{
-    name = "entity-ghost",
-    inner_name = "stone-furnace",
-    position = { 22, 23 },
-    direction = 12,
-    force = c.force
-}
-
-if e then
-    storage.factorioctl_entities = storage.factorioctl_entities or {}
-storage.factorioctl_entities[e.unit_number] = e
-    rcon.print(helpers.table_to_json({
-        unit_number = e.unit_number,
-        name = e.ghost_name or "stone-furnace",
-        entity_type = "entity-ghost",
-        position = { x = e.position.x, y = e.position.y },
-        direction = e.direction,
-        health = e.health,
-        force = e.force.name
-    }))
-else
-    rcon.print('{"error": "Failed to create ghost"}')
-end"#,
-    );
-
-    LuaCase::new("start_mining", LuaCommand::start_mining(&legacy_agent(), pos(14.0, 15.0))).assert_snapshot(
-        r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
-local c = nil
-for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end
-if not c then c = storage.factorioctl_characters["__player__"] end
-if not (c and c.valid) then rcon.print('{"error":"no character for agent __player__; spawn first"}') return end
-
--- Find a minable entity at the position
-local target = nil
-local resources = game.surfaces[1].find_entities_filtered{
-    position = { 14, 15 },
-    radius = 1,
-    type = "resource"
-}
-if #resources > 0 then
-    target = resources[1]
-else
-    local entities = game.surfaces[1].find_entities_filtered{
-        position = { 14, 15 },
-        radius = 1
+    for required in [
+        "local function get_power_status_impl",
+        "local function get_power_networks_impl",
+        "local function find_power_issues_impl",
+        "local function get_power_coverage_impl",
+        "local function get_alerts_impl",
+        "get_power_status = function(x, y, radius)",
+        "get_power_networks = function(x, y, radius)",
+        "find_power_issues = function(x, y, radius)",
+        "get_power_coverage = function(x, y, radius)",
+        "get_alerts = function(x, y, radius)",
+        "local function json_remote_call",
+        "POWER_CONSUMER_TYPES",
+        "POLE_SUPPLY_AREAS",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua power diagnostics should include {required:?}"
+        );
     }
-    for _, e in pairs(entities) do
-        if e.minable and e ~= c then
-            target = e
-            break
-        end
-    end
-end
+}
 
-if not target then
-    rcon.print('{"success": false, "error": "No minable entity at position"}')
-    return
-end
+#[test]
+fn mining_queries_live_in_the_mod_not_rust_strings() {
+    for (name, lua, method) in [
+        (
+            "start_mining",
+            LuaCommand::start_mining(&named_agent(), pos(14.0, 15.0)),
+            "start_mining",
+        ),
+        (
+            "stop_mining",
+            LuaCommand::stop_mining(&named_agent()),
+            "stop_mining",
+        ),
+        (
+            "get_mining_status",
+            LuaCommand::get_mining_status(&named_agent()),
+            "get_mining_status",
+        ),
+        (
+            "mine_at",
+            LuaCommand::mine_at(&named_agent(), pos(16.0, 17.0), 2),
+            "mine_at",
+        ),
+        (
+            "find_nearest_minable",
+            LuaCommand::find_nearest_minable(&named_agent(), "iron-ore", 100),
+            "find_nearest_minable",
+        ),
+        (
+            "mine_nearest",
+            LuaCommand::mine_nearest(&named_agent(), "iron-ore", 3),
+            "mine_nearest",
+        ),
+        (
+            "clear_area",
+            LuaCommand::clear_area(&named_agent(), area(), true, true, false),
+            "clear_area",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
 
--- Check if in range
-local dx = target.position.x - c.position.x
-local dy = target.position.y - c.position.y
-local dist = math.sqrt(dx*dx + dy*dy)
-if dist > c.resource_reach_distance + 0.5 then
-    rcon.print('{"success": false, "error": "Too far", "distance": ' .. dist .. ', "reach": ' .. c.resource_reach_distance .. '}')
-    return
-end
+        for forbidden in [
+            "storage.factorioctl_characters",
+            "game.connected_players",
+            "find_entities_filtered",
+            "get_main_inventory()",
+            "mine_entity",
+            "mining_state",
+            "resource_reach_distance",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
+    }
 
--- Start mining
-c.mining_state = { mining = true, position = target.position }
-rcon.print('{"success": true, "target": "' .. target.name .. '", "position": {\"x\": ' .. target.position.x .. ', \"y\": ' .. target.position.y .. '}}')"#,
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function inventory_item_total",
+        "local function find_minable_at",
+        "local function start_mining_impl",
+        "local function stop_mining_impl",
+        "local function get_mining_status_impl",
+        "local function mine_at_impl",
+        "local function find_nearest_minable_impl",
+        "local function mine_nearest_impl",
+        "local function clear_area_impl",
+        "start_mining = function(agent_id, x, y)",
+        "stop_mining = function(agent_id)",
+        "get_mining_status = function(agent_id)",
+        "mine_at = function(agent_id, x, y, count, radius)",
+        "find_nearest_minable = function(agent_id, entity_name, radius)",
+        "mine_nearest = function(agent_id, entity_name, count)",
+        "clear_area = function(agent_id, x1, y1, x2, y2, clear_trees, clear_rocks, dry_run)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua mining remotes should include {required:?}"
+        );
+    }
+
+    assert!(
+        control_lua.contains("character.mine_entity(target, true)")
+            && control_lua
+                .contains("character.mining_state = {mining = true, position = target.position}")
+            && control_lua.contains("items = inventory_contents(inv)")
+            && control_lua.contains("picked_up = picked_up + pick_up_item_entity")
+            && control_lua.contains("local trees = surface.find_entities_filtered{type = \"tree\", area = area}")
+            && control_lua.contains("local entities = surface.find_entities_filtered{type = \"simple-entity\", area = area}")
+            && control_lua.contains("find_entities_filtered{"),
+        "control.lua should own mining scans, inventory reads, and mine_entity calls"
     );
 }
 
 #[test]
-fn recipe_prototype_blueprint_and_research_snapshots_are_stable() {
-    LuaCase::new("get_recipe", LuaCommand::get_recipe("iron-plate")).assert_snapshot(
-        r#"local recipe = prototypes.recipe["iron-plate"]
-local function recipe_unlocks(recipe_name)
-    local unlocks = {}
-    for tech_name, tech in pairs(game.forces.player.technologies) do
-        local effects = tech.prototype and tech.prototype.effects or {}
-        for _, effect in pairs(effects) do
-            if effect.type == "unlock-recipe" and effect.recipe == recipe_name then
-                table.insert(unlocks, tech_name)
-                break
-            end
-        end
-    end
-    table.sort(unlocks)
-    return unlocks
-end
-if recipe then
-    local force_recipe = game.forces.player.recipes[recipe.name]
-    local ingredients = {}
-    for _, ing in pairs(recipe.ingredients) do
-        table.insert(ingredients, {
-            type = ing.type,
-            name = ing.name,
-            amount = ing.amount
-        })
-    end
-    local products = {}
-    for _, prod in pairs(recipe.products) do
-        table.insert(products, {
-            type = prod.type,
-            name = prod.name,
-            amount = prod.amount,
-            probability = prod.probability
-        })
-    end
-    rcon.print(helpers.table_to_json({
-        name = recipe.name,
-        category = recipe.category,
-        energy = recipe.energy,
-        enabled = force_recipe and force_recipe.enabled or false,
-        unlocked_by = recipe_unlocks(recipe.name),
-        ingredients = ingredients,
-        products = products
-    }))
-else
-    rcon.print('{"error": "Recipe not found"}')
-end"#,
+fn gather_resource_reuses_mining_remotes_not_inline_resource_scans() {
+    let client_mod = include_str!("../src/client/mod.rs");
+    assert!(
+        client_mod
+            .contains("LuaCommand::find_nearest_minable(&self.agent_id, resource_name, radius)")
+            && client_mod.contains("let mine_result = self.mine_at(target_pos, 1).await?")
+            && client_mod.contains("let inv_result = self.character_inventory().await?"),
+        "gather_resource should compose existing remote-backed mining and inventory helpers"
     );
 
-    LuaCase::new(
-        "get_prototype",
-        LuaCommand::get_prototype("assembling-machine-1"),
-    )
-    .assert_snapshot(
-        r#"local proto = prototypes.entity["assembling-machine-1"]
-if proto then
-    local result = {
-        name = proto.name,
-        type = proto.type,
+    for forbidden in [
+        "resource_name_lua",
+        "rcon.print(\"mined\")",
+        "rcon.print(\"none\")",
+        "c.mine_entity(resources[1], true)",
+        "local resources = game.surfaces[1].find_entities_filtered",
+        "local inv = c.get_main_inventory()",
+    ] {
+        assert!(
+            !client_mod.contains(forbidden),
+            "gather_resource should not reintroduce inline Lua snippet {forbidden:?}"
+        );
+    }
+}
+
+#[test]
+fn recipe_prototype_blueprint_and_research_snapshots_are_stable() {
+    for (name, lua, method) in [
+        (
+            "get_recipe",
+            LuaCommand::get_recipe("iron-plate"),
+            "get_recipe",
+        ),
+        (
+            "get_recipes_by_category",
+            LuaCommand::get_recipes_by_category("crafting"),
+            "get_recipes_by_category",
+        ),
+        (
+            "get_recipes_for_item",
+            LuaCommand::get_recipes_for_item("transport-belt"),
+            "get_recipes_for_item",
+        ),
+        (
+            "get_prototype",
+            LuaCommand::get_prototype("assembling-machine-1"),
+            "get_prototype",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+        for forbidden in [
+            "prototypes.recipe",
+            "prototypes.entity",
+            "recipe_unlocks",
+            "recipe.ingredients",
+            "recipe.products",
+            "try_get",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
+        }
     }
 
-    -- Helper to safely get property
-    local function try_get(fn)
-        local ok, val = pcall(fn)
-        if ok then return val end
-        return nil
-    end
-
-    -- Calculate size from collision box
-    local cb = try_get(function() return proto.collision_box end)
-    if cb then
-        result.size = {
-            cb.right_bottom.x - cb.left_top.x,
-            cb.right_bottom.y - cb.left_top.y
+    for (name, lua, method) in [
+        (
+            "get_research_status",
+            LuaCommand::get_research_status(),
+            "get_research_status",
+        ),
+        (
+            "get_available_research",
+            LuaCommand::get_available_research(&named_agent()),
+            "get_available_research",
+        ),
+        (
+            "start_research",
+            LuaCommand::start_research("automation"),
+            "start_research",
+        ),
+        (
+            "is_tech_researched",
+            LuaCommand::is_tech_researched("automation"),
+            "is_tech_researched",
+        ),
+    ] {
+        assert!(
+            lua.contains(&format!(
+                r#"remote.interfaces["claude_interface"]["{}"]"#,
+                method
+            )) && lua.contains(&format!(r#"remote.call("claude_interface", "{}""#, method)),
+            "{name} should be a small guarded mod remote call:\n{lua}"
+        );
+        for forbidden in [
+            "force.technologies",
+            "find_entities_filtered",
+            "research_unit_ingredients",
+            "force.add_research",
+            "lab_input",
+        ] {
+            assert!(
+                !lua.contains(forbidden),
+                "{name} Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+            );
         }
-    end
+    }
 
-    -- Crafting machine properties (use method for speed)
-    local craft_speed = try_get(function() return proto.get_crafting_speed() end)
-    if craft_speed then
-        result.crafting_speed = craft_speed
-    end
-    local craft_cats = try_get(function() return proto.crafting_categories end)
-    if craft_cats then
-        result.crafting_categories = {}
-        for cat, _ in pairs(craft_cats) do
-            table.insert(result.crafting_categories, cat)
-        end
-    end
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+    for required in [
+        "local function recipe_unlocks",
+        "local function recipe_ingredients",
+        "local function recipe_products",
+        "local function recipe_summary",
+        "local function recipe_details",
+        "local function get_recipe_impl",
+        "local function get_recipes_by_category_impl",
+        "local function get_recipes_for_item_impl",
+        "local function get_prototype_impl",
+        "get_recipe = function(name)",
+        "get_recipes_by_category = function(category)",
+        "get_recipes_for_item = function(item)",
+        "get_prototype = function(name)",
+        "local function research_ingredients",
+        "local function research_effects",
+        "local function science_totals_from_labs",
+        "local function count_science_from_inventory",
+        "local function get_research_status_impl",
+        "local function get_available_research_impl",
+        "local function start_research_impl",
+        "local function is_tech_researched_impl",
+        "get_research_status = function()",
+        "get_available_research = function(agent_id)",
+        "start_research = function(tech_name)",
+        "is_tech_researched = function(tech_name)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua recipe/prototype/research remotes should include {required:?}"
+        );
+    }
 
-    -- Mining drill properties
-    local mining_speed = try_get(function() return proto.mining_speed end)
-    if mining_speed then
-        result.mining_speed = mining_speed
-    end
-    local res_cats = try_get(function() return proto.resource_categories end)
-    if res_cats then
-        result.resource_categories = {}
-        for cat, _ in pairs(res_cats) do
-            table.insert(result.resource_categories, cat)
-        end
-    end
-
-    -- Inserter properties
-    local rot_speed = try_get(function() return proto.inserter_rotation_speed end)
-    if rot_speed then
-        result.rotation_speed = rot_speed
-    end
-    local ext_speed = try_get(function() return proto.inserter_extension_speed end)
-    if ext_speed then
-        result.extension_speed = ext_speed
-    end
-
-    -- Belt properties
-    local belt_speed = try_get(function() return proto.belt_speed end)
-    if belt_speed then
-        result.belt_speed = belt_speed
-    end
-
-    -- Energy
-    local energy = try_get(function() return proto.energy_usage end)
-    if energy then
-        result.energy_usage = energy
-    end
-
-    -- Energy source
-    if try_get(function() return proto.burner_prototype end) then
-        result.energy_source = "burner"
-    elseif try_get(function() return proto.electric_energy_source_prototype end) then
-        result.energy_source = "electric"
-    elseif try_get(function() return proto.heat_energy_source_prototype end) then
-        result.energy_source = "heat"
-    elseif try_get(function() return proto.void_energy_source_prototype end) then
-        result.energy_source = "void"
-    end
-
-    rcon.print(helpers.table_to_json(result))
-else
-    rcon.print('{"error": "Prototype not found"}')
-end"#,
+    assert!(
+        control_lua.contains("force.add_research(tech)")
+            && control_lua.contains(
+                "local labs = surface.find_entities_filtered{type = \"lab\", force = force}"
+            )
+            && control_lua.contains("lab.get_inventory(defines.inventory.lab_input)")
+            && control_lua.contains("local have = science_totals[ing.name] or 0")
+            && control_lua.contains("return {success = false, error = \"Technology not found\"}"),
+        "control.lua should own research lab scans, science accounting, and queueing"
     );
+}
 
-    LuaCase::new("get_blueprint", LuaCommand::get_blueprint("starter")).assert_snapshot(
-        r#"storage.blueprints = storage.blueprints or {}
-local data = storage.blueprints["starter"]
-if data then
-    rcon.print(helpers.table_to_json({
-        blueprint_string = data.string,
-        entity_count = data.entity_count
-    }))
-else
-    rcon.print('{"error": "Blueprint not found"}')
-end"#,
+#[test]
+fn research_cli_queries_use_mod_remotes_not_inline_lua() {
+    let research_rs = include_str!("../src/cli/research.rs");
+    let client_mod = include_str!("../src/client/mod.rs");
+
+    for required in [
+        "LuaCommand::get_research_status()",
+        "LuaCommand::get_available_research(client.agent_id())",
+        "LuaCommand::start_research(&tech)",
+        "LuaCommand::is_tech_researched(tech_name)",
+    ] {
+        assert!(
+            research_rs.contains(required) || client_mod.contains(required),
+            "research path should use wrapper {required:?}"
+        );
+    }
+
+    for forbidden in [
+        "force.technologies",
+        "force.current_research",
+        "research_unit_ingredients",
+        "game.forces.player.technologies",
+    ] {
+        assert!(
+            !research_rs.contains(forbidden) && !client_mod.contains(forbidden),
+            "research CLI/client should not embed inline gameplay Lua {forbidden:?}"
+        );
+    }
+}
+
+#[test]
+fn eval_harness_production_snapshot_lives_in_mod_remote_not_python_lua() {
+    let eval_py = include_str!("../companion/bridge/eval.py");
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+
+    assert!(
+        eval_py.contains(r#"remote.call("claude_interface", "eval_production_snapshot""#),
+        "eval harness should query production stats via a mod remote"
     );
+    for forbidden in [
+        "game.surfaces",
+        "game.forces.player",
+        "get_item_production_statistics",
+        "get_flow_count",
+        "defines.flow_precision_index",
+    ] {
+        assert!(
+            !eval_py.contains(forbidden),
+            "eval harness should not embed production Lua {forbidden:?}"
+        );
+    }
 
-    LuaCase::new("start_research", LuaCommand::start_research("automation")).assert_snapshot(
-        r#"local force = game.forces.player
-local surface = game.surfaces[1]
-local tech = force.technologies["automation"]
-
-if not tech then
-    rcon.print('{"success": false, "error": "Technology not found"}')
-    return
-end
-
-if tech.researched then
-    rcon.print('{"success": false, "error": "Already researched"}')
-    return
-end
-
-if not tech.enabled then
-    rcon.print('{"success": false, "error": "Technology not enabled"}')
-    return
-end
-
--- Check prerequisites
-for _, prereq in pairs(tech.prerequisites) do
-    if not prereq.researched then
-        rcon.print('{"success": false, "error": "Prerequisites not met: ' .. prereq.name .. '"}')
-        return
-    end
-end
-
--- Check for labs
-local labs = surface.find_entities_filtered{type = "lab", force = force}
-if #labs == 0 then
-    rcon.print('{"success": false, "error": "No labs found! Build a lab first (requires: 10 iron-gear-wheel, 10 electronic-circuit, 4 transport-belt)", "action_needed": "build_lab"}')
-    return
-end
-
--- Check if any lab has power
-local powered_labs = 0
-for _, lab in pairs(labs) do
-    local status = lab.status
-    if status ~= defines.entity_status.no_power and status ~= defines.entity_status.low_power then
-        powered_labs = powered_labs + 1
-    end
-end
-if powered_labs == 0 then
-    rcon.print('{"success": false, "error": "Labs have no power! Connect labs to power grid.", "action_needed": "power_labs"}')
-    return
-end
-
--- Check for required science packs
-local ingredients = {}
-local missing_packs = {}
-local science_in_labs = {}
-
--- Count science packs in labs
-for _, lab in pairs(labs) do
-    local inv = lab.get_inventory(defines.inventory.lab_input)
-    if inv then
-        for i = 1, #inv do
-            local stack = inv[i]
-            if stack and stack.valid_for_read then
-                science_in_labs[stack.name] = (science_in_labs[stack.name] or 0) + stack.count
-            end
-        end
-    end
-end
-
-for _, ing in pairs(tech.research_unit_ingredients) do
-    table.insert(ingredients, {name = ing.name, amount = ing.amount})
-    local have = science_in_labs[ing.name] or 0
-    if have < ing.amount then
-        table.insert(missing_packs, ing.name .. " (need " .. ing.amount .. ", have " .. have .. " in labs)")
-    end
-end
-
-if #missing_packs > 0 then
-    rcon.print(helpers.table_to_json({
-        success = false,
-        error = "Missing science packs in labs: " .. table.concat(missing_packs, ", "),
-        action_needed = "insert_science_packs",
-        required_packs = ingredients,
-        hint = "Craft the required science packs and insert them into your labs"
-    }))
-    return
-end
-
--- Queue the research properly (not cheating)
-local added = force.add_research(tech)
-if added then
-    rcon.print(helpers.table_to_json({
-        success = true,
-        name = tech.name,
-        research_unit_count = tech.research_unit_count,
-        ingredients = ingredients,
-        message = "Research queued! Labs will now consume science packs to progress."
-    }))
-else
-    rcon.print('{"success": false, "error": "Failed to queue research - check if another research is in progress"}')
-end"#,
-    );
+    for required in [
+        "local function eval_production_snapshot_impl",
+        "game.forces.player.get_item_production_statistics(surface)",
+        "defines.flow_precision_index.one_minute",
+        "stats.get_flow_count{",
+        "eval_production_snapshot = function(surface_name)",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua should own eval production snapshot logic {required:?}"
+        );
+    }
 }
 
 #[test]
@@ -1195,6 +2032,16 @@ fn generated_lua_escapes_hostile_string_arguments_as_single_literals() {
                 LuaCommand::place_entity(&legacy_agent(), raw, pos(1.0, 2.0), Direction::North),
             ),
             (
+                "place_underground_belt",
+                LuaCommand::place_underground_belt(
+                    &legacy_agent(),
+                    raw,
+                    pos(1.0, 2.0),
+                    Direction::North,
+                    "input",
+                ),
+            ),
+            (
                 "insert_items",
                 LuaCommand::insert_items(45, raw, 1, "chest"),
             ),
@@ -1207,6 +2054,56 @@ fn generated_lua_escapes_hostile_string_arguments_as_single_literals() {
             (
                 "import_blueprint",
                 LuaCommand::import_blueprint(&legacy_agent(), raw, pos(1.0, 2.0), 0),
+            ),
+            (
+                "find_nearest_minable",
+                LuaCommand::find_nearest_minable(&legacy_agent(), raw, 100),
+            ),
+            (
+                "mine_nearest",
+                LuaCommand::mine_nearest(&legacy_agent(), raw, 1),
+            ),
+            (
+                "build_drill_array_resource",
+                LuaCommand::build_drill_array(
+                    &legacy_agent(),
+                    1,
+                    raw,
+                    Some((1.0, 2.0)),
+                    "burner-mining-drill",
+                    "south",
+                ),
+            ),
+            (
+                "build_drill_array_drill",
+                LuaCommand::build_drill_array(
+                    &legacy_agent(),
+                    1,
+                    "iron-ore",
+                    Some((1.0, 2.0)),
+                    raw,
+                    "south",
+                ),
+            ),
+            (
+                "build_smelter_line_furnace",
+                LuaCommand::build_smelter_line(&legacy_agent(), 1, (1.0, 2.0), raw, "east", 3),
+            ),
+            (
+                "build_smelter_line_direction",
+                LuaCommand::build_smelter_line(
+                    &legacy_agent(),
+                    1,
+                    (1.0, 2.0),
+                    "stone-furnace",
+                    raw,
+                    3,
+                ),
+            ),
+            ("broadcast_console", LuaCommand::broadcast_console(raw)),
+            (
+                "broadcast_flying_text",
+                LuaCommand::broadcast_flying_text(raw),
             ),
             ("start_research", LuaCommand::start_research(raw)),
         ] {
@@ -1228,48 +2125,11 @@ fn generated_lua_escapes_hostile_string_arguments_as_single_literals() {
 
 #[test]
 fn lua_escape_is_safe_in_single_quoted_literals() {
-    // build_drill_array embeds escaped resource names inside SINGLE-quoted Lua
-    // literals (rcon.print('...No <resource> found...')). The escaper must
-    // neutralize single quotes too, or a name like "iron'ore" breaks out.
+    // Some legacy snippets still use single-quoted Lua literals. The escaper
+    // must neutralize single quotes too, or a name like "iron'ore" breaks out.
     assert_eq!(LuaCommand::lua_escape("iron'ore"), "iron\\'ore");
     // Both quote styles are escaped, so the value is safe in either context.
     assert_eq!(LuaCommand::lua_escape("a\"b'c"), "a\\\"b\\'c");
-}
-
-#[test]
-fn resolve_helpers_match_spec_snapshots() {
-    let named = AgentId::new(Some("doug")).unwrap();
-    let legacy = AgentId::new(None).unwrap();
-
-    LuaCase::new("resolve_required_named", LuaCommand::resolve_required(&named)).assert_snapshot(
-        r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
-local c = storage.factorioctl_characters["doug"]
-if not (c and c.valid) then rcon.print('{"error":"no character for agent doug; spawn first"}') return end"#,
-    );
-
-    LuaCase::new("resolve_required_legacy", LuaCommand::resolve_required(&legacy)).assert_snapshot(
-        r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
-local c = nil
-for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end
-if not c then c = storage.factorioctl_characters["__player__"] end
-if not (c and c.valid) then rcon.print('{"error":"no character for agent __player__; spawn first"}') return end"#,
-    );
-
-    LuaCase::new(
-        "resolve_optional_named",
-        LuaCommand::resolve_optional(&named),
-    )
-    .assert_snapshot(
-        r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
-local c = storage.factorioctl_characters["doug"]"#,
-    );
-
-    LuaCase::new("resolve_optional_legacy", LuaCommand::resolve_optional(&legacy)).assert_snapshot(
-        r#"storage.factorioctl_characters = storage.factorioctl_characters or {}
-local c = nil
-for _, p in pairs(game.connected_players) do if p.character and p.character.valid then c = p.character break end end
-if not c then c = storage.factorioctl_characters["__player__"] end"#,
-    );
 }
 
 #[test]
@@ -1278,26 +2138,34 @@ fn static_builder_tests_cover_named_legacy_extract_and_registry_contracts() {
     let legacy = legacy_agent();
 
     let named_lua = LuaCommand::walk_character(&named, pos(12.0, 13.0));
-    assert!(named_lua.contains("storage.factorioctl_characters[\"doug\"]"));
+    assert!(
+        named_lua.contains(r#"remote.call("claude_interface", "set_walk_target", "doug", 12, 13)"#)
+    );
+    assert!(!named_lua.contains("storage.factorioctl_characters"));
     assert!(!named_lua.contains("connected_players"));
     assert!(!named_lua.contains("global."));
+    assert!(!named_lua.contains("walking_state"));
 
     let legacy_lua = LuaCommand::walk_character(&legacy, pos(12.0, 13.0));
-    assert!(legacy_lua.contains("for _, p in pairs(game.connected_players) do"));
-    assert!(legacy_lua.contains("storage.factorioctl_characters[\"__player__\"]"));
+    assert!(legacy_lua
+        .contains(r#"remote.call("claude_interface", "set_walk_target", "__player__", 12, 13)"#));
+    assert!(!legacy_lua.contains("for _, p in pairs(game.connected_players) do"));
+    assert!(!legacy_lua.contains("storage.factorioctl_characters"));
+    assert!(!legacy_lua.contains("walking_state"));
 
     let extract_lua = LuaCommand::extract_items(&named, 46, "iron-ore", 6, "chest");
-    assert!(extract_lua.contains("local player_inv = c.get_main_inventory()"));
+    assert!(extract_lua.contains(r#"remote.call("claude_interface", "extract_items", "doug", 46"#));
+    assert!(!extract_lua.contains("get_main_inventory()"));
     assert!(!extract_lua.contains("game.players[1]"));
-    assert!(extract_lua.contains("extracted = 0"));
-    assert!(extract_lua.contains("available = available"));
-    assert!(!extract_lua.contains("\"error\": \"No items of that type in inventory\""));
+
+    let get_entity_inventory_lua = LuaCommand::get_entity_inventory(42);
+    assert!(get_entity_inventory_lua
+        .contains(r#"remote.call("claude_interface", "get_entity_inventory", 42)"#));
 
     for lua in [
-        LuaCommand::get_entity_inventory(42),
         LuaCommand::extract_items(&named, 46, "iron-ore", 6, "chest"),
         LuaCommand::set_recipe(47, "copper-cable"),
     ] {
-        assert!(lua.contains("storage.factorioctl_entities["));
+        assert!(!lua.contains("storage.factorioctl_entities["));
     }
 }

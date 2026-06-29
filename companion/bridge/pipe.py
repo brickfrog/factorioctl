@@ -96,6 +96,9 @@ from ledger import (apply_ledger_update, load_ledger, parse_ledger_trailer,
 from journal import (append_event, apply_reflection_update, count_events,
                      load_events, load_reflection, render_memory,
                      should_reflect, strip_reflection_trailer)
+from learning import (apply_learning_update, learning_proposal_prompt,
+                      load_accepted_learning, render_accepted_learning,
+                      strip_learning_trailers)
 from planner import build_autonomy_prompt, choose_autonomy_mode
 from skills import strip_skill_trailer
 from rcon import RCONClient, ThreadSafeRCON, lua_long_string
@@ -1088,11 +1091,13 @@ def _finalize_reply(reply: str, agent_name: str) -> str:
     ledger_update = parse_ledger_trailer(reply)
     apply_ledger_update(agent_name, reply)
     apply_reflection_update(agent_name, reply)
+    apply_learning_update(agent_name, reply)
     if ledger_update and ledger_update.get("progress"):
         append_event(agent_name, "progress", ledger_update["progress"])
     _record_anomaly(reply, agent_name)
     reply = strip_ledger_trailer(reply)
     reply = strip_reflection_trailer(reply)
+    reply = strip_learning_trailers(reply)
     reply = strip_skill_trailer(reply)
     if not reply.strip():
         return "(action complete)"
@@ -1394,14 +1399,15 @@ class AgentThread:
         self.inbox.put(msg)
 
     def _human_connected(self) -> bool:
-        """True if at least one human player is connected. AI agents are orphan
-        character entities (not game.players), so connected_players counts only
-        real human clients. On any RCON error, return False so we don't burn
-        autonomy turns when we can't confirm a human is present."""
+        """True if at least one human player is connected.
+
+        AI agents are orphan character entities, so the mod-side remote counts
+        only real client connections. On any RCON error, return False so we
+        don't burn autonomy turns when we can't confirm a human is present.
+        """
         try:
-            out = self.rcon.execute(
-                f"/silent-command {_RCON_PRINT}(#game.connected_players)"
-            )
+            lua = f'{_RCON_PRINT}(tostring(remote.call("claude_interface", "connected_player_count")))'
+            out = self.rcon.execute(f"/silent-command {lua}")
             return int(out.strip() or "0") > 0
         except Exception as e:
             self.log.debug("human-connected check failed: {}", e)
@@ -1411,25 +1417,7 @@ class AgentThread:
         """Best-effort one-line live state for autonomy ticks."""
         try:
             agent = lua_long_string(self.agent_name)
-            lua = (
-                f'local c = remote.call("claude_interface", "get_character", {agent}) '
-                'if c and c.valid then '
-                'local names = {"burner-mining-drill","electric-mining-drill",'
-                '"stone-furnace","assembling-machine-1","transport-belt",'
-                '"burner-inserter","inserter","small-electric-pole",'
-                '"medium-electric-pole","offshore-pump","boiler",'
-                '"steam-engine","pipe","lab"} '
-                'local parts = {} '
-                'for _, name in ipairs(names) do '
-                'local count = #c.surface.find_entities_filtered{force=c.force, name=name} '
-                'if count > 0 then parts[#parts + 1] = name .. "=" .. count end '
-                'end '
-                'local summary = "" '
-                'if #parts > 0 then summary = "; player entities: " .. table.concat(parts, ", ") end '
-                f'{_RCON_PRINT}("Live state: " .. c.surface.name .. " @ " .. '
-                'string.format("%.1f,%.1f", c.position.x, c.position.y) .. summary) '
-                'end'
-            )
+            lua = f'{_RCON_PRINT}(remote.call("claude_interface", "live_state_line", {agent}))'
             return self.rcon.execute(f"/silent-command {lua}").strip()
         except Exception as e:
             self.log.debug("live-state lookup failed: {}", e)
@@ -1446,6 +1434,7 @@ class AgentThread:
         events = load_events(self.agent_name, 5)
         memory = render_memory(events, load_reflection(self.agent_name))
         ledger_text = render_ledger(ledger)
+        learned_text = render_accepted_learning(load_accepted_learning())
         mode = choose_autonomy_mode(
             ledger, self._exec_ticks_since_plan, self._planner_interval,
         )
@@ -1457,12 +1446,14 @@ class AgentThread:
             self._exec_ticks_since_plan = 0
         else:
             self._exec_ticks_since_plan += 1
-        parts = [memory, ledger_text]
+        parts = [memory, ledger_text, learned_text]
         continuity_parts = [part for part in parts if part]
 
         message = build_autonomy_prompt(
             mode, "\n\n".join(continuity_parts), self._live_state_line(),
         )
+        if mode == "plan":
+            message = "\n\n".join([message, learning_proposal_prompt()])
         if should_reflect(
             count_events(self.agent_name), getattr(self, "_reflect_interval", 16),
         ):

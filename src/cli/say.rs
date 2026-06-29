@@ -59,8 +59,7 @@ pub async fn execute(cmd: SayCommand, conn: &ResolvedConnectionArgs) -> Result<(
 async fn display_console(client: &mut FactorioClient, message: &str) -> Result<()> {
     // Unescape shell-escaped exclamation marks (bash escapes ! as \!)
     let unescaped = message.replace("\\!", "!");
-    let escaped = LuaCommand::lua_escape(&unescaped);
-    let lua = format!(r#"game.print("[Agent] {}")"#, escaped);
+    let lua = LuaCommand::broadcast_console(&unescaped);
     client.execute_lua(&lua).await?;
     Ok(())
 }
@@ -68,22 +67,7 @@ async fn display_console(client: &mut FactorioClient, message: &str) -> Result<(
 async fn display_flying_text(client: &mut FactorioClient, message: &str) -> Result<()> {
     // Unescape shell-escaped exclamation marks (bash escapes ! as \!)
     let unescaped = message.replace("\\!", "!");
-    let escaped = LuaCommand::lua_escape(&unescaped);
-    let lua = format!(
-        r#"
-local player = game.players[1]
-if player and player.character and player.character.valid then
-    player.create_local_flying_text{{
-        text = "{}",
-        position = {{ player.character.position.x, player.character.position.y - 2 }},
-        color = {{ r = 0.8, g = 0.8, b = 1.0 }},
-        speed = 0.3,
-        time_to_live = 300
-    }}
-end
-"#,
-        escaped
-    );
+    let lua = LuaCommand::broadcast_flying_text(&unescaped);
     client.execute_lua(&lua).await?;
     Ok(())
 }

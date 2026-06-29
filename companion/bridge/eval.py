@@ -172,38 +172,12 @@ def query_snapshot(rcon: Any, surface: str = "nauvis") -> Snapshot:
     """
     empty: Snapshot = {"produced": {}, "rate_per_min": {}}
     surface_literal = lua_long_string(surface)
-    lua = f"""
-local surface = game.surfaces[{surface_literal}]
-if not surface then
-  rcon.print('{{"produced":{{}},"rate_per_min":{{}}}}')
-  return
-end
-local force = game.forces.player
-local stats = force.get_item_production_statistics(surface)
-local produced = {{}}
-local rate_per_min = {{}}
-local precision = defines.flow_precision_index.one_minute
-for item, count in pairs(stats.input_counts or {{}}) do
-  local name = type(item) == "string" and item or item.name
-  if name then
-    produced[name] = count
-    rate_per_min[name] = stats.get_flow_count{{
-      name = name,
-      category = "input",
-      precision_index = precision,
-    }}
-  end
-end
-local payload = {{produced = produced, rate_per_min = rate_per_min}}
-local ok, encoded = pcall(function() return helpers.table_to_json(payload) end)
-if ok then
-  rcon.print(encoded)
-else
-  rcon.print('{{"produced":{{}},"rate_per_min":{{}}}}')
-end
-"""
+    lua = (
+        'rcon.print(remote.call("claude_interface", "eval_production_snapshot", '
+        f"{surface_literal}))"
+    )
     try:
-        response = rcon.execute("/silent-command " + " ".join(lua.split()))
+        response = rcon.execute("/silent-command " + lua)
         parsed = _last_json_object(response)
         if parsed is None:
             return empty

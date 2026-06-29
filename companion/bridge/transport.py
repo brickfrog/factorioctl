@@ -47,13 +47,8 @@ def setup_surfaces(rcon, planets: list[str]) -> dict[str, str]:
     Returns {planet: status} where status is 'exists' or 'created'."""
     results = {}
     for planet in planets:
-        lua = (
-            f'local p = game.planets["{planet}"] '
-            f'if not p then rcon.print("no_planet") return end '
-            f'if game.surfaces["{planet}"] then rcon.print("exists") return end '
-            f'p.create_surface() '
-            f'rcon.print("created")'
-        )
+        planet_encoded = lua_long_string(planet)
+        lua = f'rcon.print(remote.call("claude_interface", "ensure_surface", {planet_encoded}))'
         result = rcon.execute(f'/silent-command {lua}').strip()
         results[planet] = result
     return results
@@ -65,39 +60,13 @@ def pre_place_character(rcon, agent_name: str, planet: str, spawn_offset: int = 
     spawn_offset shifts the X position to avoid overlapping with the player.
     Returns status: already_placed, teleported, created, surface_not_found, creation_failed.
 
-    All character state lives in mod storage (synced in MP) — no _G.global usage.
-    The live entity is also synced into factorioctl's level-script registry
-    (storage.factorioctl_characters[agent_id]) so the agent's factorioctl MCP
-    tools — which resolve bodies via that table — actually find it. Without that
-    sync the agent is a ghost: registered in the mod, invisible to every
-    walk/mine/build tool. pre_place runs in the level-script context, so it can
-    write storage.factorioctl_characters directly."""
+    All character state lives in mod storage (synced in MP) — no _G.global usage."""
     spawn_x = spawn_offset * 5 + 5  # offset from player spawn at (0,0)
+    agent_encoded = lua_long_string(agent_name)
+    planet_encoded = lua_long_string(planet)
     lua_code = (
-        f'local agent_id = "{agent_name}" '
-        f'local target_surface = game.surfaces["{planet}"] '
-        'if not target_surface then rcon.print("surface_not_found") return end '
-        # Force terrain generation around spawn (4 chunks ≈ 128 tiles)
-        f'target_surface.request_to_generate_chunks({{{spawn_x}, 0}}, 4) '
-        'target_surface.force_generate_chunk_requests() '
-        'local status '
-        'local c = remote.call("claude_interface", "get_character", agent_id) '
-        'if c and c.valid then '
-        f'  if c.surface.name == "{planet}" then status = "already_placed" '
-        f'  else c.teleport({{{spawn_x}, 0}}, target_surface) status = "teleported" end '
-        'else '
-        f'  c = target_surface.create_entity{{name = "character", position = {{{spawn_x}, 0}}, force = game.forces.player}} '
-        '  if c then remote.call("claude_interface", "register_character", agent_id, c) status = "created" end '
-        'end '
-        'if c and c.valid then '
-        '  storage.factorioctl_characters = storage.factorioctl_characters or {} '
-        '  storage.factorioctl_entities = storage.factorioctl_entities or {} '
-        '  storage.factorioctl_characters[agent_id] = c '
-        '  storage.factorioctl_entities[c.unit_number] = c '
-        '  rcon.print(status) '
-        'else '
-        '  rcon.print("creation_failed") '
-        'end'
+        'rcon.print(remote.call("claude_interface", "pre_place_character", '
+        f'{agent_encoded}, {planet_encoded}, {spawn_x}))'
     )
     result = rcon.execute(f'/silent-command {lua_code}')
     return result.strip()

@@ -3,6 +3,16 @@ import unittest
 import eval as eval_harness
 
 
+class FakeRcon:
+    def __init__(self, response):
+        self.response = response
+        self.commands = []
+
+    def execute(self, command):
+        self.commands.append(command)
+        return self.response
+
+
 class ProductionScoreTest(unittest.TestCase):
     def test_empty_score_is_zero(self):
         self.assertEqual(eval_harness.production_score({}), 0.0)
@@ -112,6 +122,47 @@ class EvaluateTest(unittest.TestCase):
             result["milestones"],
             {name: False for name, _ in eval_harness.MILESTONES},
         )
+
+
+class QuerySnapshotTest(unittest.TestCase):
+    def test_query_snapshot_uses_mod_remote_not_inline_world_lua(self):
+        rcon = FakeRcon(
+            '{"produced":{"iron-plate":12},"rate_per_min":{"iron-plate":16}}\n'
+        )
+
+        snapshot = eval_harness.query_snapshot(rcon, surface="nauvis")
+
+        self.assertEqual(snapshot["produced"], {"iron-plate": 12.0})
+        self.assertEqual(snapshot["rate_per_min"], {"iron-plate": 16.0})
+        self.assertEqual(len(rcon.commands), 1)
+        command = rcon.commands[0]
+        self.assertIn(
+            'remote.call("claude_interface", "eval_production_snapshot"', command
+        )
+        for forbidden in [
+            "game.surfaces",
+            "game.forces.player",
+            "get_item_production_statistics",
+            "get_flow_count",
+            "defines.flow_precision_index",
+        ]:
+            self.assertNotIn(forbidden, command)
+
+    def test_query_snapshot_treats_empty_object_buckets_as_empty_maps(self):
+        rcon = FakeRcon('{"produced":{},"rate_per_min":{}}\n')
+
+        snapshot = eval_harness.query_snapshot(rcon)
+
+        self.assertEqual(snapshot, {"produced": {}, "rate_per_min": {}})
+
+    def test_query_snapshot_errors_return_empty_snapshot(self):
+        class BrokenRcon:
+            def execute(self, command):
+                raise RuntimeError("rcon down")
+
+        snapshot = eval_harness.query_snapshot(BrokenRcon())
+
+        self.assertEqual(snapshot, {"produced": {}, "rate_per_min": {}})
 
 
 if __name__ == "__main__":

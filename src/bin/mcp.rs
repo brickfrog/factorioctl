@@ -34,34 +34,7 @@ struct ConnectionConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{drill_drop_position_lua, execute_lua_refusal, raw_lua_enabled};
-
-    #[test]
-    fn drill_drop_position_lua_uses_registry_lookup_and_no_trailing_comment() {
-        let lua = drill_drop_position_lua(42);
-
-        assert!(
-            lua.contains("storage.factorioctl_entities[42]"),
-            "drill drop-position Lua should use the registry-first entity lookup"
-        );
-        assert!(
-            !lua.contains("game.get_entity_by_unit_number"),
-            "Lua-created entities are not found reliably by game.get_entity_by_unit_number"
-        );
-
-        for line in lua.lines() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("--") {
-                continue;
-            }
-            if let Some(comment_idx) = line.find("--") {
-                assert!(
-                    line[..comment_idx].trim().is_empty(),
-                    "same-line trailing Lua comment will swallow later joined statements: {line}"
-                );
-            }
-        }
-    }
+    use super::{execute_lua_refusal, raw_lua_enabled};
 
     #[test]
     fn raw_lua_enabled_only_accepts_explicit_truthy_values() {
@@ -341,32 +314,6 @@ pub struct InsertItemsParams {
 
 fn default_inventory_type() -> String {
     "chest".to_string()
-}
-
-fn drill_drop_position_lua(unit_number: u32) -> String {
-    let lookup = LuaCommand::entity_lookup(unit_number);
-    format!(
-        r#"
-{}
-if e and e.valid and e.drop_position then
-    local dp = e.drop_position
-    local dir = e.direction
-    -- Calculate belt direction based on drill facing
-    -- Drill faces a direction, belt should run perpendicular or away
-    -- Belt runs in same direction as drill faces
-    local belt_dir = dir
-    rcon.print(game.table_to_json({{
-        drop_x = dp.x,
-        drop_y = dp.y,
-        drill_direction = dir,
-        belt_direction = belt_dir
-    }}))
-else
-    rcon.print(game.table_to_json({{error = "Entity not found or has no drop_position"}}))
-end
-"#,
-        lookup
-    )
 }
 
 fn raw_lua_enabled(env_value: Option<&str>) -> bool {
@@ -958,7 +905,7 @@ impl FactorioMcp {
 
         if is_drill {
             // For drills, query the actual drop_position from Factorio
-            let lua = drill_drop_position_lua(params.unit_number);
+            let lua = LuaCommand::get_entity_drop_position(params.unit_number);
 
             let drop_result = match client.execute_lua(&lua).await {
                 Ok(r) => r,
@@ -2604,8 +2551,7 @@ impl FactorioMcp {
             };
 
             if broadcast_config.console {
-                let escaped = factorioctl::client::lua::LuaCommand::lua_escape(&params.message);
-                let lua = format!(r#"game.print("[Agent] {}")"#, escaped);
+                let lua = factorioctl::client::lua::LuaCommand::broadcast_console(&params.message);
                 if let Err(e) = client.execute_lua(&lua).await {
                     results.push(format!("Console error: {}", e));
                 } else {
@@ -2614,22 +2560,8 @@ impl FactorioMcp {
             }
 
             if broadcast_config.flying_text {
-                let escaped = factorioctl::client::lua::LuaCommand::lua_escape(&params.message);
-                let lua = format!(
-                    r#"
-local player = game.players[1]
-if player and player.character and player.character.valid then
-    player.create_local_flying_text{{
-        text = "{}",
-        position = {{ player.character.position.x, player.character.position.y - 2 }},
-        color = {{ r = 0.8, g = 0.8, b = 1.0 }},
-        speed = 0.3,
-        time_to_live = 300
-    }}
-end
-"#,
-                    escaped
-                );
+                let lua =
+                    factorioctl::client::lua::LuaCommand::broadcast_flying_text(&params.message);
                 if let Err(e) = client.execute_lua(&lua).await {
                     results.push(format!("Flying text error: {}", e));
                 } else {

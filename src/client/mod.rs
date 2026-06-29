@@ -80,6 +80,15 @@ struct LuaErrorResponse {
     error: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct NearestMinableResponse {
+    #[serde(default)]
+    found: bool,
+    position: Option<Position>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
 fn ensure_lua_success(response: &str) -> Result<()> {
     if let Ok(parsed) = serde_json::from_str::<LuaErrorResponse>(response) {
         if let Some(error) = parsed.error {
@@ -171,9 +180,10 @@ impl FactorioClient {
 
     /// Get current game tick
     pub async fn get_tick(&mut self) -> Result<Tick> {
-        let response = self.execute_lua("rcon.print(game.tick)").await?;
-        let tick: u64 = response.trim().parse()?;
-        Ok(Tick { tick })
+        let lua = LuaCommand::get_tick();
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
+        Ok(serde_json::from_str(&response)?)
     }
 
     /// Get list of surfaces
@@ -496,10 +506,6 @@ impl FactorioClient {
     /// Mine entity at position
     /// Walks to the entity if needed, then mines with mine_entity
     pub async fn mine_at(&mut self, position: Position, count: u32) -> Result<MineResult> {
-        // Get initial inventory count
-        let inv_before = self.character_inventory().await?;
-        let count_before: u32 = inv_before.items.iter().map(|i| i.count).sum();
-
         // Walk to the target first
         let char_pos = self.get_character_position().await?;
         let dist = ((position.x - char_pos.x).powi(2) + (position.y - char_pos.y).powi(2)).sqrt();
@@ -507,85 +513,9 @@ impl FactorioClient {
             let _ = self.walk_to(position, false).await?;
         }
 
-        // Mine using mine_entity (instant but reliable), also handles items on ground
-        let resolve = LuaCommand::resolve_required(&self.agent_id);
-        let mine_lua = format!(
-            r#"
-{}
-
-local inv = c.get_main_inventory()
-local mined = 0
-local picked_up = 0
-
-for i = 1, {} do
-    -- First check for items on ground (item-entity type)
-    local items_on_ground = game.surfaces[1].find_entities_filtered{{
-        position = {{ {}, {} }},
-        radius = 3,
-        type = "item-entity"
-    }}
-
-    if #items_on_ground > 0 then
-        local item_entity = items_on_ground[1]
-        local stack = item_entity.stack
-        if stack and stack.valid_for_read and inv then
-            local inserted = inv.insert(stack)
-            if inserted > 0 then
-                picked_up = picked_up + inserted
-                item_entity.destroy()
-            end
-        end
-    else
-        -- Try resources first
-        local resources = game.surfaces[1].find_entities_filtered{{
-            position = {{ {}, {} }},
-            radius = 3,
-            type = "resource"
-        }}
-
-        local target = nil
-        if #resources > 0 then
-            target = resources[1]
-        else
-            local entities = game.surfaces[1].find_entities_filtered{{
-                position = {{ {}, {} }},
-                radius = 3
-            }}
-            for _, e in pairs(entities) do
-                if e.minable and e ~= c then
-                    target = e
-                    break
-                end
-            end
-        end
-
-        if target then
-            c.mine_entity(target, true)
-            mined = mined + 1
-        else
-            break
-        end
-    end
-end
-
-rcon.print('{{"success": true, "mined": ' .. mined .. ', "picked_up": ' .. picked_up .. '}}')
-"#,
-            resolve, count, position.x, position.y, position.x, position.y, position.x, position.y
-        );
-
-        let _ = self.execute_lua(&mine_lua).await?;
-
-        // Get final inventory
-        let inv_after = self.character_inventory().await?;
-        let count_after: u32 = inv_after.items.iter().map(|i| i.count).sum();
-        let items_gained = count_after.saturating_sub(count_before);
-
-        Ok(MineResult {
-            success: items_gained > 0,
-            mined_count: items_gained,
-            error: None,
-            inventory: inv_after.items,
-        })
+        let lua = LuaCommand::mine_at(&self.agent_id, position, count);
+        let response = self.execute_lua(&lua).await?;
+        Ok(serde_json::from_str(&response)?)
     }
 
     /// Mine nearest entity of a type
@@ -594,61 +524,26 @@ rcon.print('{{"success": true, "mined": ' .. mined .. ', "picked_up": ' .. picke
         // Get initial inventory
         let inv_before = self.character_inventory().await?;
         let count_before: u32 = inv_before.items.iter().map(|i| i.count).sum();
-        let entity_type_lua = LuaCommand::lua_escape(entity_type);
 
         for _ in 0..count {
-            // Find nearest entity of type
-            let resolve = LuaCommand::resolve_required(&self.agent_id);
-            let find_lua = format!(
-                r#"
-{}
-
-local entities = game.surfaces[1].find_entities_filtered{{
-    name = "{}",
-    position = c.position,
-    radius = 100
-}}
-
-local nearest = nil
-local nearest_dist = math.huge
-for _, e in pairs(entities) do
-    if e.minable then
-        local dx = e.position.x - c.position.x
-        local dy = e.position.y - c.position.y
-        local dist = dx*dx + dy*dy
-        if dist < nearest_dist then
-            nearest = e
-            nearest_dist = dist
-        end
-    end
-end
-
-if nearest then
-    rcon.print(nearest.position.x .. "," .. nearest.position.y)
-else
-    rcon.print("none")
-end
-"#,
-                resolve, entity_type_lua
-            );
-
+            let find_lua = LuaCommand::find_nearest_minable(&self.agent_id, entity_type, 100);
             let response = self.execute_lua(&find_lua).await?;
-            if response.trim() == "none" || response.trim() == "error" {
+            let nearest: NearestMinableResponse = serde_json::from_str(&response)?;
+            if let Some(error) = nearest.error {
+                anyhow::bail!(error);
+            }
+            if !nearest.found {
                 break;
             }
-
-            // Parse position
-            let parts: Vec<&str> = response.trim().split(',').collect();
-            if parts.len() != 2 {
+            let Some(target_pos) = nearest.position else {
                 break;
-            }
-            let target_pos = Position {
-                x: parts[0].parse().unwrap_or(0.0),
-                y: parts[1].parse().unwrap_or(0.0),
             };
 
             // Walk to and mine
-            let _ = self.mine_at(target_pos, 1).await?;
+            let result = self.mine_at(target_pos, 1).await?;
+            if !result.success {
+                break;
+            }
         }
 
         // Get final inventory
@@ -830,14 +725,15 @@ end
 
     /// Check if a technology has been researched
     pub async fn is_tech_researched(&mut self, tech_name: &str) -> Result<bool> {
-        let tech_name = LuaCommand::lua_escape(tech_name);
-        let lua = format!(
-            r#"local tech = game.forces.player.technologies["{}"]
-               rcon.print(tech and tech.researched and "true" or "false")"#,
-            tech_name
-        );
-        let result = self.execute_lua(&lua).await?;
-        Ok(result.trim() == "true")
+        let lua = LuaCommand::is_tech_researched(tech_name);
+        let response = self.execute_lua(&lua).await?;
+        #[derive(serde::Deserialize)]
+        struct TechState {
+            researched: bool,
+        }
+
+        let result: TechState = serde_json::from_str(&response)?;
+        Ok(result.researched)
     }
 
     /// Place an underground belt with specified type (input or output)
@@ -873,20 +769,25 @@ end
 
     /// Pause the game
     pub async fn pause_game(&mut self) -> Result<()> {
-        self.execute_lua("game.tick_paused = true").await?;
+        let lua = LuaCommand::set_tick_paused(true);
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
     /// Resume the game
     pub async fn resume_game(&mut self) -> Result<()> {
-        self.execute_lua("game.tick_paused = false").await?;
+        let lua = LuaCommand::set_tick_paused(false);
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
     /// Set game speed
     pub async fn set_game_speed(&mut self, speed: f64) -> Result<()> {
-        let lua = format!("game.speed = {}", speed);
-        self.execute_lua(&lua).await?;
+        let lua = LuaCommand::set_game_speed(speed);
+        let response = self.execute_lua(&lua).await?;
+        ensure_lua_success(&response)?;
         Ok(())
     }
 
@@ -943,17 +844,7 @@ end
 
     /// Get character's current position (uses first connected player or spawned character)
     pub async fn get_character_position(&mut self) -> Result<Position> {
-        let lua = format!(
-            "{}\n{}",
-            LuaCommand::resolve_optional(&self.agent_id),
-            r#"
-if c and c.valid then
-    rcon.print(c.position.x .. "," .. c.position.y)
-else
-    rcon.print("error")
-end
-"#
-        );
+        let lua = LuaCommand::get_character_position(&self.agent_id);
         let response = self.execute_lua(&lua).await?;
         let parts: Vec<&str> = response.trim().split(',').collect();
         if parts.len() != 2 {
@@ -1051,76 +942,20 @@ end
     pub async fn walk_to(&mut self, target: Position, _run: bool) -> Result<WalkResult> {
         let mut total_distance = 0.0;
         let start_pos = self.get_character_position().await?;
-
-        if !self.agent_id.is_legacy() {
-            let target_lua = LuaCommand::set_walk_target(&self.agent_id, target);
-            let clear_lua = LuaCommand::clear_walk_target(&self.agent_id);
-            let active_lua = LuaCommand::walk_target_active(&self.agent_id);
-            self.execute_lua(&target_lua).await?;
-            let mut last_pos = start_pos;
-
-            for _ in 0..500 {
-                let pos = self.get_character_position().await?;
-                total_distance += pos.distance(&last_pos);
-
-                if pos.distance(&target) < 3.0 {
-                    self.execute_lua(&clear_lua).await?;
-                    return Ok(WalkResult {
-                        arrived: true,
-                        final_position: pos,
-                        distance_walked: total_distance,
-                        reason: None,
-                    });
-                }
-
-                let target_active = self.execute_lua(&active_lua).await?;
-                if target_active.trim() != "true" {
-                    return Ok(WalkResult {
-                        arrived: pos.distance(&target) < 3.0,
-                        final_position: pos,
-                        distance_walked: total_distance,
-                        reason: Some("Walk target cleared".to_string()),
-                    });
-                }
-
-                last_pos = pos;
-                tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-            }
-
-            self.execute_lua(&clear_lua).await?;
-            let pos = self.get_character_position().await?;
-            return Ok(WalkResult {
-                arrived: false,
-                final_position: pos,
-                distance_walked: total_distance,
-                reason: Some("Timeout".to_string()),
-            });
-        }
-
         let mut last_pos = start_pos;
-        let mut last_dist = start_pos.distance(&target);
-        let mut stuck_count = 0;
-        let mut overshoot_count = 0;
 
-        // Helper to stop walking
-        let stop_lua = format!(
-            "{}\nif c then c.walking_state = {{walking=false}} end",
-            LuaCommand::resolve_required(&self.agent_id)
-        );
+        let target_lua = LuaCommand::set_walk_target(&self.agent_id, target);
+        let clear_lua = LuaCommand::clear_walk_target(&self.agent_id);
+        let active_lua = LuaCommand::walk_target_active(&self.agent_id);
+        let target_response = self.execute_lua(&target_lua).await?;
+        ensure_lua_success(&target_response)?;
 
-        for i in 0..500 {
+        for _ in 0..500 {
             let pos = self.get_character_position().await?;
-            let dx = target.x - pos.x;
-            let dy = target.y - pos.y;
-            let dist = (dx * dx + dy * dy).sqrt();
+            total_distance += pos.distance(&last_pos);
 
-            // Track distance moved this step
-            let step_dist = pos.distance(&last_pos);
-            total_distance += step_dist;
-
-            // Check if arrived (generous tolerance of 3 tiles)
-            if dist < 3.0 {
-                self.execute_lua(&stop_lua).await?;
+            if pos.distance(&target) < 3.0 {
+                self.execute_lua(&clear_lua).await?;
                 return Ok(WalkResult {
                     arrived: true,
                     final_position: pos,
@@ -1129,102 +964,26 @@ end
                 });
             }
 
-            // Check if we're moving away from target (overshoot detection)
-            if i > 2 && dist > last_dist + 0.5 {
-                overshoot_count += 1;
-                if overshoot_count >= 2 {
-                    self.execute_lua(&stop_lua).await?;
-                    return Ok(WalkResult {
-                        arrived: dist < 5.0, // Close enough
-                        final_position: pos,
-                        distance_walked: total_distance,
-                        reason: if dist < 5.0 {
-                            None
-                        } else {
-                            Some("Overshot target".to_string())
-                        },
-                    });
-                }
-            } else {
-                overshoot_count = 0;
-            }
-
-            // Check if stuck
-            if i > 3 && step_dist < 0.01 && dist > 3.0 {
-                stuck_count += 1;
-                if stuck_count >= 3 {
-                    self.execute_lua(&stop_lua).await?;
-                    return Ok(WalkResult {
-                        arrived: false,
-                        final_position: pos,
-                        distance_walked: total_distance,
-                        reason: Some("Blocked or stuck".to_string()),
-                    });
-                }
-            } else {
-                stuck_count = 0;
+            let target_active = self.execute_lua(&active_lua).await?;
+            if target_active.trim() != "true" {
+                return Ok(WalkResult {
+                    arrived: pos.distance(&target) < 3.0,
+                    final_position: pos,
+                    distance_walked: total_distance,
+                    reason: Some("Walk target cleared".to_string()),
+                });
             }
 
             last_pos = pos;
-            last_dist = dist;
-
-            // Calculate direction using explicit 8-direction logic
-            // In Factorio: North=-Y, East=+X, South=+Y, West=-X
-            let dir_name = if dx.abs() < 0.5 {
-                if dy < 0.0 {
-                    "north"
-                } else {
-                    "south"
-                }
-            } else if dy.abs() < 0.5 {
-                if dx > 0.0 {
-                    "east"
-                } else {
-                    "west"
-                }
-            } else {
-                let ratio = dy.abs() / dx.abs();
-                if ratio < 0.414 {
-                    if dx > 0.0 {
-                        "east"
-                    } else {
-                        "west"
-                    }
-                } else if ratio > 2.414 {
-                    if dy < 0.0 {
-                        "north"
-                    } else {
-                        "south"
-                    }
-                } else {
-                    match (dx > 0.0, dy < 0.0) {
-                        (true, true) => "northeast",
-                        (true, false) => "southeast",
-                        (false, false) => "southwest",
-                        (false, true) => "northwest",
-                    }
-                }
-            };
-
-            // Set walking state using Factorio's defines.direction
-            let resolve = LuaCommand::resolve_required(&self.agent_id);
-            let lua = format!(
-                r#"{}
-if c then c.walking_state = {{walking=true, direction=defines.direction.{}}} end"#,
-                resolve, dir_name
-            );
-            self.execute_lua(&lua).await?;
-
             tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
         }
 
-        // Timeout
-        self.execute_lua(&stop_lua).await?;
+        self.execute_lua(&clear_lua).await?;
         let pos = self.get_character_position().await?;
         Ok(WalkResult {
             arrived: false,
             final_position: pos,
-            distance_walked: start_pos.distance(&pos),
+            distance_walked: total_distance,
             reason: Some("Timeout".to_string()),
         })
     }
@@ -1238,117 +997,33 @@ if c then c.walking_state = {{walking=true, direction=defines.direction.{}}} end
     ) -> Result<GatherResult> {
         let mut total_distance = 0.0;
         let mut gathered = 0u32;
-        let resource_name_lua = LuaCommand::lua_escape(resource_name);
 
         for _ in 0..amount {
-            // Find nearest resource
-            let resolve = LuaCommand::resolve_required(&self.agent_id);
-            let find_lua = format!(
-                r#"
-{}
-
-local entities = game.surfaces[1].find_entities_filtered{{
-    name = "{}",
-    position = c.position,
-    radius = {}
-}}
-
-local nearest = nil
-local nearest_dist = math.huge
-for _, e in pairs(entities) do
-    local dx = e.position.x - c.position.x
-    local dy = e.position.y - c.position.y
-    local dist = dx*dx + dy*dy
-    if dist < nearest_dist then
-        nearest = e
-        nearest_dist = dist
-    end
-end
-
-if nearest then
-    rcon.print(nearest.position.x .. "," .. nearest.position.y)
-else
-    rcon.print("none")
-end
-"#,
-                resolve, resource_name_lua, radius
-            );
-
+            let find_lua = LuaCommand::find_nearest_minable(&self.agent_id, resource_name, radius);
             let response = self.execute_lua(&find_lua).await?;
-            if response.trim() == "none" || response.trim() == "error" {
+            let nearest: NearestMinableResponse = serde_json::from_str(&response)?;
+            if let Some(error) = nearest.error {
+                anyhow::bail!(error);
+            }
+            if !nearest.found {
                 break;
             }
-
-            // Parse position
-            let parts: Vec<&str> = response.trim().split(',').collect();
-            if parts.len() != 2 {
+            let Some(target_pos) = nearest.position else {
                 break;
-            }
-            let target_pos = Position {
-                x: parts[0].parse().unwrap_or(0.0),
-                y: parts[1].parse().unwrap_or(0.0),
             };
 
-            // Walk to the resource
             let walk_result = self.walk_to(target_pos, false).await?;
             total_distance += walk_result.distance_walked;
 
-            // Mine the resource using mine_entity (instant but reliable)
-            let resolve = LuaCommand::resolve_required(&self.agent_id);
-            let mine_lua = format!(
-                r#"
-{}
-
-local resources = game.surfaces[1].find_entities_filtered{{
-    position = {{ x = {}, y = {} }},
-    radius = 0.5,
-    type = "resource"
-}}
-if #resources > 0 then
-    c.mine_entity(resources[1], true)
-    rcon.print("mined")
-else
-    rcon.print("no_resource")
-end
-"#,
-                resolve, target_pos.x, target_pos.y
-            );
-            let mine_result = self.execute_lua(&mine_lua).await?;
-
-            match mine_result.trim() {
-                "mined" => gathered += 1,
-                "no_char" | "no_resource" => break,
-                _ => {}
+            let mine_result = self.mine_at(target_pos, 1).await?;
+            if mine_result.success {
+                gathered += 1;
+            } else {
+                break;
             }
         }
 
-        // Get final inventory
-        let inv_lua = format!(
-            "{}\n{}",
-            LuaCommand::resolve_required(&self.agent_id),
-            r#"
-if not (c and c.valid) then rcon.print('{"items":[]}') return end
-local inv = c.get_main_inventory()
-local items = {}
-if inv then
-    for _, item in pairs(inv.get_contents()) do
-        table.insert(items, { name = item.name, count = item.count })
-    end
-end
-if #items == 0 then
-    rcon.print('{"items":[]}')
-else
-    rcon.print(helpers.table_to_json({ items = items }))
-end
-"#
-        );
-        let inv_response = self.execute_lua(&inv_lua).await?;
-        #[derive(serde::Deserialize)]
-        struct InvResult {
-            items: Vec<crate::world::InventoryItem>,
-        }
-        let inv_result: InvResult =
-            serde_json::from_str(&inv_response).unwrap_or(InvResult { items: Vec::new() });
+        let inv_result = self.character_inventory().await?;
 
         Ok(GatherResult {
             success: gathered > 0,
@@ -1369,109 +1044,14 @@ end
         drill_type: &str,
         direction: &str,
     ) -> Result<BuildResult> {
-        let dir = Direction::from_name(direction).unwrap_or(Direction::South);
-        let near_pos = near.unwrap_or((0.0, 0.0));
-        let drill_type_lua = LuaCommand::lua_escape(drill_type);
-        let resource_lua = LuaCommand::lua_escape(resource);
-
-        let resolve = LuaCommand::resolve_required(&self.agent_id);
-        let lua = format!(
-            r#"
-{resolve}
-
-local inv = c.get_main_inventory()
-local drill_count = 0
-for _, item in pairs(inv.get_contents()) do
-    if item.name == "{drill_type}" then drill_count = item.count end
-end
-
-if drill_count < {count} then
-    rcon.print('{{"placed":0,"total":{count},"entities":[],"errors":["Not enough drills in inventory (have ' .. drill_count .. ')"]}}')
-    return
-end
-
--- Find resource tiles
-local resources = game.surfaces[1].find_entities_filtered{{
-    name = "{resource}",
-    position = {{{near_x}, {near_y}}},
-    radius = 100
-}}
-
-if #resources == 0 then
-    rcon.print('{{"placed":0,"total":{count},"entities":[],"errors":["No {resource} found nearby"]}}')
-    return
-end
-
--- Sort by distance to near position
-table.sort(resources, function(a, b)
-    local da = (a.position.x - {near_x})^2 + (a.position.y - {near_y})^2
-    local db = (b.position.x - {near_x})^2 + (b.position.y - {near_y})^2
-    return da < db
-end)
-
-local placed = 0
-local entities = {{}}
-local errors = {{}}
-local used_positions = {{}}
-
-for _, res in pairs(resources) do
-    if placed >= {count} then break end
-
-    -- Round position to grid
-    local px = math.floor(res.position.x)
-    local py = math.floor(res.position.y)
-    local key = px .. "," .. py
-
-    if not used_positions[key] then
-        -- Check if can place
-        local can = game.surfaces[1].can_place_entity{{
-            name = "{drill_type}",
-            position = {{px, py}},
-            direction = {direction},
-            force = c.force
-        }}
-
-        if can then
-            local e = game.surfaces[1].create_entity{{
-                name = "{drill_type}",
-                position = {{px, py}},
-                direction = {direction},
-                force = c.force
-            }}
-            if e then
-                storage.factorioctl_entities = storage.factorioctl_entities or {{}}
-                storage.factorioctl_entities[e.unit_number] = e
-                inv.remove{{name = "{drill_type}", count = 1}}
-                placed = placed + 1
-                used_positions[key] = true
-                table.insert(entities, {{
-                    unit_number = e.unit_number,
-                    name = e.name,
-                    type = e.type,
-                    position = {{x = e.position.x, y = e.position.y}},
-                    direction = e.direction
-                }})
-            end
-        end
-    end
-end
-
-rcon.print(helpers.table_to_json({{
-    placed = placed,
-    total = {count},
-    entities = entities,
-    errors = errors
-}}))
-"#,
-            count = count,
-            resolve = resolve,
-            drill_type = drill_type_lua,
-            resource = resource_lua,
-            near_x = near_pos.0,
-            near_y = near_pos.1,
-            direction = dir.to_factorio()
+        let lua = LuaCommand::build_drill_array(
+            &self.agent_id,
+            count,
+            resource,
+            near,
+            drill_type,
+            direction,
         );
-
         let response = self.execute_lua(&lua).await?;
         let result: BuildResult = serde_json::from_str(&response)?;
         Ok(result)
@@ -1486,84 +1066,14 @@ rcon.print(helpers.table_to_json({{
         line_direction: &str,
         spacing: u32,
     ) -> Result<BuildResult> {
-        let (dx, dy) = match line_direction.to_lowercase().as_str() {
-            "east" | "e" => (spacing as f64, 0.0),
-            "west" | "w" => (-(spacing as f64), 0.0),
-            "south" | "s" => (0.0, spacing as f64),
-            "north" | "n" => (0.0, -(spacing as f64)),
-            _ => (spacing as f64, 0.0),
-        };
-        let furnace_type_lua = LuaCommand::lua_escape(furnace_type);
-
-        let resolve = LuaCommand::resolve_required(&self.agent_id);
-        let lua = format!(
-            r#"
-{resolve}
-
-local inv = c.get_main_inventory()
-local furnace_count = 0
-for _, item in pairs(inv.get_contents()) do
-    if item.name == "{furnace_type}" then furnace_count = item.count end
-end
-
-if furnace_count < {count} then
-    rcon.print('{{"placed":0,"total":{count},"entities":[],"errors":["Not enough furnaces in inventory (have ' .. furnace_count .. ')"]}}')
-    return
-end
-
-local placed = 0
-local entities = {{}}
-local errors = {{}}
-
-for i = 0, {count} - 1 do
-    local px = {start_x} + i * {dx}
-    local py = {start_y} + i * {dy}
-
-    local can = game.surfaces[1].can_place_entity{{
-        name = "{furnace_type}",
-        position = {{px, py}},
-        force = c.force
-    }}
-
-    if can then
-        local e = game.surfaces[1].create_entity{{
-            name = "{furnace_type}",
-            position = {{px, py}},
-            force = c.force
-        }}
-        if e then
-            storage.factorioctl_entities = storage.factorioctl_entities or {{}}
-            storage.factorioctl_entities[e.unit_number] = e
-            inv.remove{{name = "{furnace_type}", count = 1}}
-            placed = placed + 1
-            table.insert(entities, {{
-                unit_number = e.unit_number,
-                name = e.name,
-                type = e.type,
-                position = {{x = e.position.x, y = e.position.y}}
-            }})
-        end
-    else
-        table.insert(errors, "Cannot place at " .. px .. "," .. py)
-    end
-end
-
-rcon.print(helpers.table_to_json({{
-    placed = placed,
-    total = {count},
-    entities = entities,
-    errors = errors
-}}))
-"#,
-            count = count,
-            resolve = resolve,
-            furnace_type = furnace_type_lua,
-            start_x = start.0,
-            start_y = start.1,
-            dx = dx,
-            dy = dy
+        let lua = LuaCommand::build_smelter_line(
+            &self.agent_id,
+            count,
+            start,
+            furnace_type,
+            line_direction,
+            spacing,
         );
-
         let response = self.execute_lua(&lua).await?;
         let result: BuildResult = serde_json::from_str(&response)?;
         Ok(result)
@@ -1613,36 +1123,7 @@ rcon.print(helpers.table_to_json({{
 
     /// Get items on transport belts in an area
     pub async fn get_belt_contents(&mut self, area: Area) -> Result<BeltContentsResult> {
-        let lua = format!(
-            r#"local belts = game.surfaces[1].find_entities_filtered{{area = {{{{{}, {}}}, {{{}, {}}}}}, type = "transport-belt"}}
-local belt_items = {{}}
-local item_totals = {{}}
-local total_items = 0
-for _, belt in pairs(belts) do
-    local belt_data = {{position = {{x = belt.position.x, y = belt.position.y}}, unit_number = belt.unit_number, items = {{}}}}
-    for i = 1, belt.get_max_transport_line_index() do
-        local line = belt.get_transport_line(i)
-        local count = line.get_item_count()
-        if count > 0 then
-            for _, item in pairs(line.get_contents()) do
-                table.insert(belt_data.items, {{name = item.name, count = item.count}})
-                item_totals[item.name] = (item_totals[item.name] or 0) + item.count
-                total_items = total_items + item.count
-            end
-        end
-    end
-    if #belt_data.items > 0 then
-        table.insert(belt_items, belt_data)
-    end
-end
-local summary = {{}}
-for item_name, count in pairs(item_totals) do
-    table.insert(summary, {{name = item_name, count = count}})
-end
-rcon.print(helpers.table_to_json({{belt_count = #belts, total_items = total_items, item_summary = summary, belts = belt_items}}))"#,
-            area.left_top.x, area.left_top.y, area.right_bottom.x, area.right_bottom.y
-        );
-
+        let lua = LuaCommand::get_belt_contents(area);
         let response = self.execute_lua(&lua).await?;
         let result: BeltContentsResult = serde_json::from_str(&response)?;
         Ok(result)

@@ -24,6 +24,7 @@ logs/
 # Orchestration state — never tracked (no audit-receipt / bead-export commits)
 /.choir/
 /.beads/
+/.factorioctl/
 .dolt/
 *.db
 .beads-credential-key

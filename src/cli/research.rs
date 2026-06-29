@@ -6,6 +6,26 @@ use clap::{Args, Subcommand};
 use super::ResolvedConnectionArgs;
 use crate::client::lua::LuaCommand;
 
+fn empty_object_as_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Array(values) => values
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<Vec<T>, _>>()
+            .map_err(serde::de::Error::custom),
+        serde_json::Value::Object(map) if map.is_empty() => Ok(Vec::new()),
+        serde_json::Value::Null => Ok(Vec::new()),
+        other => Err(serde::de::Error::custom(format!(
+            "expected array or empty object, got {other}"
+        ))),
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct ResearchCommand {
     #[command(subcommand)]
@@ -100,96 +120,96 @@ pub async fn execute(cmd: ResearchCommand, conn: &ResolvedConnectionArgs) -> Res
         }
 
         ResearchSubcommand::Available => {
-            let response = client
-                .execute_lua(
-                    r#"
-local force = game.forces.player
-local available = {}
-for name, tech in pairs(force.technologies) do
-    if not tech.researched and tech.enabled then
-        local all_met = true
-        for _, prereq in pairs(tech.prerequisites) do
-            if not prereq.researched then
-                all_met = false
-                break
-            end
-        end
-        if all_met then
-            local packs = {}
-            for _, ing in pairs(tech.research_unit_ingredients) do
-                table.insert(packs, ing.name .. " x" .. ing.amount)
-            end
-            table.insert(available, {
-                name = name,
-                cost = tech.research_unit_count,
-                packs = table.concat(packs, ", ")
-            })
-        end
-    end
-end
-rcon.print(helpers.table_to_json(available))
-"#,
-                )
-                .await?;
+            let lua = LuaCommand::get_available_research(client.agent_id());
+            let response = client.execute_lua(&lua).await?;
 
+            #[derive(serde::Deserialize)]
+            struct Ingredient {
+                name: String,
+                amount: u32,
+                #[allow(dead_code)]
+                available: Option<u32>,
+            }
             #[derive(serde::Deserialize)]
             struct Tech {
                 name: String,
-                cost: u32,
-                packs: String,
+                research_unit_count: u32,
+                #[serde(default, deserialize_with = "empty_object_as_vec")]
+                ingredients: Vec<Ingredient>,
+                #[serde(default)]
+                ready: String,
+                #[serde(default, deserialize_with = "empty_object_as_vec")]
+                blockers: Vec<String>,
             }
-            let techs: Vec<Tech> = serde_json::from_str(&response)?;
+            #[derive(serde::Deserialize)]
+            struct Available {
+                #[serde(default, deserialize_with = "empty_object_as_vec")]
+                technologies: Vec<Tech>,
+                guidance: Option<String>,
+            }
+            let available: Available = serde_json::from_str(&response)?;
 
-            if techs.is_empty() {
+            if available.technologies.is_empty() {
                 println!("No technologies available to research");
             } else {
                 println!("Available technologies:");
-                for tech in &techs {
-                    if tech.packs.is_empty() {
-                        println!("  {} ({} units)", tech.name, tech.cost);
+                for tech in &available.technologies {
+                    let packs = tech
+                        .ingredients
+                        .iter()
+                        .map(|ing| format!("{} x{}", ing.name, ing.amount))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let state = if tech.ready.is_empty() {
+                        String::new()
                     } else {
-                        println!("  {} ({} units: {})", tech.name, tech.cost, tech.packs);
+                        format!(" [{}]", tech.ready)
+                    };
+                    if packs.is_empty() {
+                        println!(
+                            "  {} ({} units{})",
+                            tech.name, tech.research_unit_count, state
+                        );
+                    } else {
+                        println!(
+                            "  {} ({} units{}: {})",
+                            tech.name, tech.research_unit_count, state, packs
+                        );
+                    }
+                    if !tech.blockers.is_empty() {
+                        println!("    blocked by: {}", tech.blockers.join(", "));
                     }
                 }
+            }
+
+            if let Some(guidance) = available.guidance {
+                println!("\nHint: {}", guidance);
             }
         }
 
         ResearchSubcommand::Current => {
-            let response = client
-                .execute_lua(
-                    r#"
-local force = game.forces.player
-local current = force.current_research
-if current then
-    local progress = force.research_progress
-    rcon.print(helpers.table_to_json({
-        name = current.name,
-        progress = progress,
-        cost = current.research_unit_count
-    }))
-else
-    rcon.print('{"name": null}')
-end
-"#,
-                )
-                .await?;
+            let lua = LuaCommand::get_research_status();
+            let response = client.execute_lua(&lua).await?;
 
             #[derive(serde::Deserialize)]
-            struct Current {
-                name: Option<String>,
-                progress: Option<f64>,
-                cost: Option<u32>,
+            struct CurrentResearch {
+                name: String,
+                research_unit_count: u32,
             }
-            let current: Current = serde_json::from_str(&response)?;
+            #[derive(serde::Deserialize)]
+            struct Status {
+                current_research: Option<CurrentResearch>,
+                research_progress: f64,
+            }
+            let status: Status = serde_json::from_str(&response)?;
 
-            if let Some(name) = current.name {
-                let progress = current.progress.unwrap_or(0.0);
-                let cost = current.cost.unwrap_or(1);
+            if let Some(current) = status.current_research {
+                let cost = current.research_unit_count;
                 println!(
                     "Researching: {} ({:.1}% complete, {}/{})",
-                    name,
-                    progress * 100.0,
-                    (progress * cost as f64) as u32,
+                    current.name,
+                    status.research_progress * 100.0,
+                    (status.research_progress * cost as f64) as u32,
                     cost
                 );
             } else {
