@@ -2,6 +2,8 @@
 
 import socket
 import struct
+import time
+from typing import Any
 
 
 class RCONClient:
@@ -10,25 +12,109 @@ class RCONClient:
     SERVERDATA_AUTH = 3
     SERVERDATA_EXECCOMMAND = 2
 
-    def __init__(self, host: str, port: int, password: str):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        password: str,
+        *,
+        timeout: float = 30.0,
+        reconnect_initial_delay: float = 0.5,
+        reconnect_max_delay: float = 10.0,
+        retry_forever: bool = True,
+        log: Any = None,
+    ):
         self.host = host
         self.port = port
         self.password = password
+        self.timeout = timeout
+        self.reconnect_initial_delay = reconnect_initial_delay
+        self.reconnect_max_delay = reconnect_max_delay
+        self.retry_forever = retry_forever
+        self.log = log
         self._request_id = 0
         self.sock = None
-        self._connect()
+        self._connect_with_retry("initial connect")
 
-    def _connect(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.settimeout(30)
-        self.sock.connect((self.host, self.port))
-        self._authenticate()
+    def _log(self, level: str, message: str, *args):
+        if not self.log:
+            return
+        method = getattr(self.log, level, None)
+        if method:
+            method(message, *args)
+
+    def _close_socket(self):
+        sock = self.sock
+        self.sock = None
+        if sock:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def _connect_once(self):
+        self._close_socket()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        try:
+            sock.connect((self.host, self.port))
+            self.sock = sock
+            self._authenticate()
+        except Exception:
+            try:
+                sock.close()
+            except OSError:
+                pass
+            self.sock = None
+            raise
+
+    def _connect_with_retry(self, reason: str):
+        delay = max(0.0, self.reconnect_initial_delay)
+        max_delay = max(delay, self.reconnect_max_delay)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                self._connect_once()
+                if attempt > 1:
+                    self._log(
+                        "info",
+                        "RCON reconnected to {}:{} after {} attempt(s)",
+                        self.host,
+                        self.port,
+                        attempt,
+                    )
+                return
+            except (ConnectionError, socket.timeout, OSError) as e:
+                self._close_socket()
+                if not self.retry_forever:
+                    raise
+                if attempt == 1:
+                    self._log(
+                        "warning",
+                        "RCON unavailable during {}; retrying until Factorio returns: {}",
+                        reason,
+                        e,
+                    )
+                else:
+                    self._log(
+                        "debug",
+                        "RCON reconnect attempt {} failed during {}: {}",
+                        attempt,
+                        reason,
+                        e,
+                    )
+                if delay > 0:
+                    time.sleep(delay)
+                    delay = min(max_delay, delay * 2 if delay else max_delay)
 
     def _next_id(self) -> int:
         self._request_id += 1
         return self._request_id
 
     def _send_packet(self, packet_type: int, body: str) -> int:
+        if self.sock is None:
+            raise ConnectionError("RCON socket is not connected")
         req_id = self._next_id()
         body_bytes = body.encode("utf-8")
         size = 4 + 4 + len(body_bytes) + 1 + 1
@@ -46,6 +132,8 @@ class RCONClient:
         return req_id, pkt_type, body
 
     def _recv_bytes(self, n: int) -> bytes:
+        if self.sock is None:
+            raise ConnectionError("RCON socket is not connected")
         buf = b""
         while len(buf) < n:
             chunk = self.sock.recv(n - len(buf))
@@ -62,20 +150,24 @@ class RCONClient:
             raise ConnectionError("RCON authentication failed")
 
     def execute(self, command: str) -> str:
-        try:
-            self._send_packet(self.SERVERDATA_EXECCOMMAND, command)
-            _, _, body = self._recv_packet()
-            return body
-        except (ConnectionError, socket.timeout, OSError):
-            print("[bridge] RCON disconnected, reconnecting...")
-            self._connect()
-            self._send_packet(self.SERVERDATA_EXECCOMMAND, command)
-            _, _, body = self._recv_packet()
-            return body
+        while True:
+            try:
+                if self.sock is None:
+                    self._connect_with_retry("command")
+                self._send_packet(self.SERVERDATA_EXECCOMMAND, command)
+                _, _, body = self._recv_packet()
+                return body
+            except (ConnectionError, socket.timeout, OSError) as e:
+                self._log(
+                    "warning",
+                    "RCON command failed; reconnecting before retry: {}",
+                    e,
+                )
+                self._close_socket()
+                self._connect_with_retry("command retry")
 
     def close(self):
-        if self.sock:
-            self.sock.close()
+        self._close_socket()
 
 
 class ThreadSafeRCON:

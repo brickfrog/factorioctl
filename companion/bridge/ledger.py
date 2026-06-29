@@ -8,6 +8,13 @@ from pathlib import Path
 
 
 LEDGER_RE = re.compile(r"<ledger>(.*?)</ledger>", re.DOTALL | re.IGNORECASE)
+STALE_BOOTSTRAP_PROGRESS_PATTERNS = (
+    "no infrastructure yet deployed",
+)
+STALE_BOOTSTRAP_OBJECTIVE_PATTERNS = (
+    "establish initial extraction infrastructure",
+)
+DEFAULT_STALE_BOOTSTRAP_LEDGER_MAX_AGE_S = 1800.0
 
 
 def _ledger_file(agent_name: str) -> Path:
@@ -43,6 +50,38 @@ def _normalize(data: dict) -> dict:
     }
 
 
+def _stale_bootstrap_max_age_s() -> float:
+    try:
+        return float(os.environ.get(
+            "BRIDGE_STALE_BOOTSTRAP_LEDGER_MAX_AGE_S",
+            str(DEFAULT_STALE_BOOTSTRAP_LEDGER_MAX_AGE_S),
+        ))
+    except (TypeError, ValueError):
+        return DEFAULT_STALE_BOOTSTRAP_LEDGER_MAX_AGE_S
+
+
+def _ledger_age_s(updated_at: str) -> float | None:
+    if not updated_at:
+        return None
+    try:
+        updated = datetime.fromisoformat(updated_at)
+    except ValueError:
+        return None
+    now = datetime.now(updated.tzinfo) if updated.tzinfo else datetime.now()
+    return max(0.0, (now - updated).total_seconds())
+
+
+def _is_stale_bootstrap_ledger(ledger: dict) -> bool:
+    objective = str(ledger.get("objective", "")).lower()
+    progress = "\n".join(str(note) for note in ledger.get("progress_notes", [])).lower()
+    if not any(pattern in objective for pattern in STALE_BOOTSTRAP_OBJECTIVE_PATTERNS):
+        return False
+    if not any(pattern in progress for pattern in STALE_BOOTSTRAP_PROGRESS_PATTERNS):
+        return False
+    age = _ledger_age_s(str(ledger.get("updated_at", "")))
+    return age is not None and age > _stale_bootstrap_max_age_s()
+
+
 def load_ledger(agent_name: str) -> dict:
     # json.JSONDecodeError and UnicodeDecodeError are both ValueError subclasses,
     # so (ValueError, OSError) covers corrupt JSON and non-UTF8/unreadable files.
@@ -51,7 +90,10 @@ def load_ledger(agent_name: str) -> dict:
     except (ValueError, OSError):
         return default_ledger()
     if isinstance(data, dict):
-        return _normalize(data)
+        ledger = _normalize(data)
+        if _is_stale_bootstrap_ledger(ledger):
+            return default_ledger()
+        return ledger
     return default_ledger()
 
 

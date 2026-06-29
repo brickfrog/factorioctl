@@ -84,13 +84,27 @@ echo "  RCON: localhost:$RCON_PORT"
 echo "  Game: localhost:$GAME_PORT"
 echo "  Save: $SAVE_PATH"
 
-"$FACTORIO_BIN" \
+STDIN_FIFO="$PROJECT_ROOT/logs/server.stdin"
+STDIN_KEEPER_PID_FILE="$PROJECT_ROOT/logs/server.stdin.pid"
+rm -f "$STDIN_FIFO" "$STDIN_KEEPER_PID_FILE"
+mkfifo "$STDIN_FIFO"
+
+# Factorio's headless server exits when stdin reaches EOF. Keep a silent writer
+# attached to a FIFO, and detach both processes from the launcher shell so
+# non-interactive invocations do not SIGHUP the server immediately after the
+# RCON readiness check passes.
+nohup tail -f /dev/null > "$STDIN_FIFO" 2>/dev/null &
+STDIN_KEEPER_PID=$!
+echo "$STDIN_KEEPER_PID" > "$STDIN_KEEPER_PID_FILE"
+
+setsid "$FACTORIO_BIN" \
     --config "$CONFIG_FILE" \
     --start-server "$SAVE_PATH" \
     --rcon-port "$RCON_PORT" \
     --rcon-password "$RCON_PASSWORD" \
     --port "$GAME_PORT" \
     --server-settings "$PROJECT_ROOT/configs/server.json" \
+    < "$STDIN_FIFO" \
     > "$PROJECT_ROOT/logs/server.log" 2>&1 &
 
 SERVER_PID=$!
@@ -112,6 +126,8 @@ if [ -x "$FACTORIOCTL" ]; then
     done
     echo ""
     echo "ERROR: Server did not become ready. Check $PROJECT_ROOT/logs/server.log"
+    kill "$SERVER_PID" "$STDIN_KEEPER_PID" 2>/dev/null || true
+    rm -f "$STDIN_FIFO" "$STDIN_KEEPER_PID_FILE" "$PROJECT_ROOT/logs/server.pid"
     exit 1
 else
     echo "factorioctl not found — skipping RCON check. Wait a few seconds, then connect."

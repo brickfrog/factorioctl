@@ -676,6 +676,338 @@ end
 -- deterministic processing in on_tick (prevents MP desync).
 -- ============================================================
 
+local function pos_table(pos)
+    if not pos then return nil end
+    return {x = pos.x, y = pos.y}
+end
+
+local function fluid_table(fluid)
+    if not fluid then return nil end
+    if type(fluid) == "string" then
+        return {name = fluid}
+    end
+    return {
+        name = fluid.name,
+        amount = fluid.amount,
+        temperature = fluid.temperature,
+    }
+end
+
+local function fluid_filter_name(filter)
+    if not filter then return nil end
+    if type(filter) == "string" then return filter end
+    if type(filter) == "table" then
+        if type(filter.name) == "string" then return filter.name end
+        if type(filter.name) == "table" and filter.name.name then return filter.name.name end
+    end
+    return tostring(filter)
+end
+
+local function inventory_contents(inv)
+    local result = {}
+    if not inv then return result end
+    for _, item in pairs(inv.get_contents()) do
+        table.insert(result, {name = item.name, count = item.count})
+    end
+    return result
+end
+
+local function status_name(status_value)
+    if status_value == nil then return nil end
+    for name, value in pairs(defines.entity_status) do
+        if value == status_value then return name end
+    end
+    return tostring(status_value)
+end
+
+local function safe_entity_status(entity)
+    local ok, value = pcall(function() return entity.status end)
+    if ok then return status_name(value) end
+    return nil
+end
+
+local function append_steam_issue(result, issue_type, severity, entity, message, action)
+    table.insert(result.issues, {
+        type = issue_type,
+        severity = severity,
+        entity = entity and {
+            unit_number = entity.unit_number,
+            name = entity.name,
+            position = pos_table(entity.position),
+        } or nil,
+        message = message,
+        action = action,
+    })
+    if action then table.insert(result.suggested_actions, action) end
+end
+
+local function fluidbox_neighbours(entity, index)
+    local neighbours = {}
+    local ok, records = pcall(function()
+        return entity.get_fluid_box_neighbours(index)
+    end)
+    if ok and type(records) == "table" then
+        for _, record in pairs(records) do
+            if record.entity then
+                table.insert(neighbours, {
+                    name = record.entity.name,
+                    unit_number = record.entity.unit_number,
+                    position = pos_table(record.entity.position),
+                    fluidbox_index = record.index,
+                })
+            end
+        end
+    end
+    return neighbours
+end
+
+local function fluidbox_pipe_connections(entity, index)
+    local connections = {}
+    local ok, records = pcall(function()
+        return entity.get_fluid_box_pipe_connections(index)
+    end)
+    if ok and type(records) == "table" then
+        for _, connection in pairs(records) do
+            local target = connection.target
+            table.insert(connections, {
+                flow_direction = tostring(connection.flow_direction),
+                connection_type = tostring(connection.connection_type),
+                position = pos_table(connection.position),
+                target_position = pos_table(connection.target_position),
+                target = target and {
+                    name = target.name,
+                    unit_number = target.unit_number,
+                    position = pos_table(target.position),
+                } or nil,
+                target_fluidbox_index = connection.target_fluidbox_index,
+                target_pipe_connection_index = connection.target_pipe_connection_index,
+            })
+        end
+    end
+    return connections
+end
+
+local function describe_fluidboxes(entity, result)
+    local boxes = {}
+    for index = 1, 12 do
+        local info = {
+            index = index,
+            neighbours = {},
+            pipe_connections = {},
+        }
+        local has_box = false
+
+        local ok_capacity, capacity = pcall(function()
+            return entity.get_fluid_capacity(index)
+        end)
+        if ok_capacity and capacity ~= nil then
+            info.capacity = capacity
+            has_box = true
+        end
+
+        local ok_filter, filter = pcall(function()
+            return entity.get_fluid_filter(index)
+        end)
+        if ok_filter and filter ~= nil then
+            info.filter = fluid_filter_name(filter)
+            has_box = true
+        end
+
+        local ok_fluid, fluid = pcall(function()
+            return entity.get_fluid(index)
+        end)
+        if ok_fluid and fluid ~= nil then
+            info.fluid = fluid_table(fluid)
+            has_box = true
+        end
+
+        local ok_has_segment, has_segment = pcall(function()
+            return entity.has_fluid_segment(index)
+        end)
+        if ok_has_segment and has_segment then
+            info.has_segment = true
+            has_box = true
+
+            local ok_segment_id, segment_id = pcall(function()
+                return entity.get_fluid_segment_id(index)
+            end)
+            if ok_segment_id and segment_id ~= nil then
+                info.segment_id = segment_id
+            end
+
+            local ok_segment_fluid, segment_fluid = pcall(function()
+                return entity.get_fluid_segment_fluid(index)
+            end)
+            if ok_segment_fluid and segment_fluid ~= nil then
+                info.segment_fluid = fluid_table(segment_fluid)
+            end
+
+            local ok_segment_capacity, segment_capacity = pcall(function()
+                return entity.get_fluid_segment_capacity(index)
+            end)
+            if ok_segment_capacity and segment_capacity ~= nil then
+                info.segment_capacity = segment_capacity
+            end
+
+            local ok_extent, extent = pcall(function()
+                return entity.get_fluid_segment_extent_bounding_box(index)
+            end)
+            if ok_extent and extent then
+                info.segment_extent = {
+                    left_top = pos_table(extent.left_top),
+                    right_bottom = pos_table(extent.right_bottom),
+                }
+            end
+
+            if info.segment_id then
+                local key = tostring(info.segment_id)
+                if not result.fluid_segments[key] then
+                    result.fluid_segments[key] = {
+                        id = info.segment_id,
+                        fluid = info.segment_fluid,
+                        capacity = info.segment_capacity,
+                        members = {},
+                    }
+                end
+                table.insert(result.fluid_segments[key].members, {
+                    unit_number = entity.unit_number,
+                    name = entity.name,
+                    position = pos_table(entity.position),
+                    fluidbox_index = index,
+                })
+                result.fluid_segments[key].member_count = #result.fluid_segments[key].members
+            end
+        end
+
+        local neighbours = fluidbox_neighbours(entity, index)
+        if #neighbours > 0 then
+            info.neighbours = neighbours
+            has_box = true
+        end
+
+        local pipe_connections = fluidbox_pipe_connections(entity, index)
+        if #pipe_connections > 0 then
+            info.pipe_connections = pipe_connections
+            has_box = true
+        end
+
+        if has_box then table.insert(boxes, info) end
+    end
+    return boxes
+end
+
+local function diagnose_steam_power_impl(x, y, radius)
+    local surface = game.surfaces[1]
+    local r = radius or 50
+    local area = {{x - r, y - r}, {x + r, y + r}}
+    local result = {
+        area = {
+            center = {x = x, y = y},
+            radius = r,
+        },
+        summary = {
+            offshore_pumps = 0,
+            boilers = 0,
+            steam_engines = 0,
+            pipes = 0,
+            electric_poles = 0,
+        },
+        entities = {},
+        fluid_segments = {},
+        issues = {},
+        suggested_actions = {},
+    }
+
+    local poles = surface.find_entities_filtered{type = "electric-pole", area = area, force = "player"}
+    result.summary.electric_poles = #poles
+
+    local steam_entities = surface.find_entities_filtered{
+        area = area,
+        force = "player",
+        name = {"offshore-pump", "boiler", "steam-engine", "pipe", "pipe-to-ground"},
+    }
+
+    for _, entity in pairs(steam_entities) do
+        if entity.name == "offshore-pump" then result.summary.offshore_pumps = result.summary.offshore_pumps + 1 end
+        if entity.name == "boiler" then result.summary.boilers = result.summary.boilers + 1 end
+        if entity.name == "steam-engine" then result.summary.steam_engines = result.summary.steam_engines + 1 end
+        if entity.name == "pipe" or entity.name == "pipe-to-ground" then result.summary.pipes = result.summary.pipes + 1 end
+
+        local item = {
+            unit_number = entity.unit_number,
+            name = entity.name,
+            type = entity.type,
+            position = pos_table(entity.position),
+            direction = entity.direction,
+            status = safe_entity_status(entity),
+            fluid_contents = {},
+            fluidboxes = {},
+        }
+
+        local ok_contents, contents = pcall(function()
+            return entity.get_fluid_contents()
+        end)
+        if ok_contents and type(contents) == "table" then
+            for name, amount in pairs(contents) do
+                table.insert(item.fluid_contents, {name = name, amount = amount})
+            end
+        end
+
+        if entity.burner then
+            local fuel_inv = entity.get_fuel_inventory()
+            item.fuel = {
+                total = fuel_inv and fuel_inv.get_item_count() or 0,
+                inventory = inventory_contents(fuel_inv),
+            }
+        end
+
+        local ok_connected, connected = pcall(function()
+            return entity.is_connected_to_electric_network()
+        end)
+        if ok_connected then item.connected_to_electric_network = connected end
+
+        item.fluidboxes = describe_fluidboxes(entity, result)
+        table.insert(result.entities, item)
+
+        if entity.name == "boiler" then
+            if item.fuel and item.fuel.total == 0 then
+                append_steam_issue(result, "boiler_no_fuel", "critical", entity, "Boiler has no fuel.", "Insert coal or another fuel into boiler unit " .. tostring(entity.unit_number) .. ".")
+            end
+            if item.status == "no_input_fluid" then
+                append_steam_issue(result, "boiler_no_water", "critical", entity, "Boiler is missing water input.", "Connect offshore pump water output to boiler unit " .. tostring(entity.unit_number) .. " water input.")
+            elseif item.status == "full_output" then
+                append_steam_issue(result, "boiler_steam_output_blocked", "critical", entity, "Boiler has steam but cannot drain it.", "Connect boiler unit " .. tostring(entity.unit_number) .. " steam output to a steam engine input, or move the blocking engine/pipe.")
+            end
+        elseif entity.name == "steam-engine" then
+            if item.status == "no_input_fluid" then
+                append_steam_issue(result, "steam_engine_no_steam", "critical", entity, "Steam engine is missing steam input.", "Connect a boiler steam output to steam engine unit " .. tostring(entity.unit_number) .. ".")
+            end
+            local nearby_poles = surface.find_entities_filtered{type = "electric-pole", position = entity.position, radius = 8, force = "player", limit = 1}
+            if #nearby_poles == 0 then
+                append_steam_issue(result, "steam_engine_not_on_grid", "warning", entity, "Steam engine has no electric pole close enough to receive generated power.", "Place an electric pole within wire reach of steam engine unit " .. tostring(entity.unit_number) .. ".")
+            end
+        elseif entity.name == "offshore-pump" then
+            if item.status == "no_power" then
+                append_steam_issue(result, "offshore_pump_no_power", "critical", entity, "Offshore pump reports no power.", "Move/rebuild pump at a valid shoreline or inspect modded pump requirements.")
+            elseif item.status == "no_input_fluid" then
+                append_steam_issue(result, "offshore_pump_not_on_water", "critical", entity, "Offshore pump is not receiving water.", "Rebuild offshore pump on a valid shoreline tile.")
+            end
+        end
+    end
+
+    if result.summary.offshore_pumps == 0 then
+        table.insert(result.suggested_actions, "No offshore pump in area; locate shoreline before building steam power.")
+    end
+    if result.summary.boilers == 0 then
+        table.insert(result.suggested_actions, "No boiler in area; build one between pump water output and steam engine input.")
+    end
+    if result.summary.steam_engines == 0 then
+        table.insert(result.suggested_actions, "No steam engine in area; build one on boiler steam output.")
+    end
+
+    return result
+end
+
 remote.add_interface("claude_interface", {
     receive_response = function(player_index, agent_name, text)
         table.insert(storage._rcon_queue, {
@@ -787,6 +1119,20 @@ remote.add_interface("claude_interface", {
             end
         end
         return helpers.table_to_json(result)
+    end,
+
+    -- Diagnose steam-power fluid and electric connectivity near a position.
+    diagnose_steam_power = function(x, y, radius)
+        local ok, result_or_error = pcall(function()
+            return diagnose_steam_power_impl(x, y, radius)
+        end)
+        if not ok then
+            return helpers.table_to_json({
+                error = tostring(result_or_error),
+                action_needed = "fix_diagnose_steam_power",
+            })
+        end
+        return helpers.table_to_json(result_or_error)
     end,
 
     -- Get character position (read-only, safe from any context)

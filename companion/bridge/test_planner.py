@@ -76,9 +76,13 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("plan", planner.PLANNER_PROMPT.lower())
         self.assertIn("<ledger>", planner.PLANNER_PROMPT)
         self.assertIn("situation_report", planner.PLANNER_PROMPT)
+        self.assertIn("live state is authoritative", planner.PLANNER_PROMPT.lower())
+        self.assertIn("local absence", planner.PLANNER_PROMPT.lower())
+        self.assertIn("target site", planner.PLANNER_PROMPT.lower())
 
         self.assertIn("do not re-plan", planner.EXECUTION_PROMPT.lower())
         self.assertIn("committed objective and plan", planner.EXECUTION_PROMPT.lower())
+        self.assertIn("stale", planner.EXECUTION_PROMPT.lower())
         self.assertIn("<ledger>", planner.EXECUTION_PROMPT)
 
     def test_build_autonomy_prompt_joins_non_empty_parts(self):
@@ -130,6 +134,22 @@ class PlannerTests(unittest.TestCase):
         tick = thread._autonomy_tick()
 
         self.assertEqual(tick["model"], "strong-planner")
+
+    def test_agent_thread_initializes_to_plan_on_resume(self):
+        class StubRCON:
+            def execute(self, _cmd):
+                return ""
+
+        thread = pipe.AgentThread(
+            {"name": "doug", "system_prompt": "system"},
+            mcp_config={},
+            rcon=StubRCON(),
+            model=None,
+            telemetry=None,
+            planner_interval=3,
+        )
+
+        self.assertEqual(thread._exec_ticks_since_plan, 3)
 
     def _thread(self):
         class StubRCON:

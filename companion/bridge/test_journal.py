@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -61,6 +62,33 @@ class JournalTests(unittest.TestCase):
 
         self.assertEqual(len(journal.load_events("doug")), 2)
         self.assertEqual(journal.load_reflection("doug"), journal.default_reflection())
+
+    def test_transient_provider_failures_do_not_pollute_memory(self):
+        path = self.base / ".journal-doug.jsonl"
+        path.write_text(
+            '{"ts": "t1", "kind": "failure", "text": "Reached maximum number of turns (200)"}\n'
+            '{"ts": "t2", "kind": "failure", "text": "API Error: Request rejected (429) - Usage limit reached"}\n'
+            '{"ts": "t3", "kind": "failure", "text": "[{\\"type\\":\\"text\\",\\"text\\":\\"Error: expected value at line 1 column 1\\"}]"}\n'
+            '{"ts": "t4", "kind": "failure", "text": "stream idle timeout after 300s"}\n'
+            '{"ts": "t5", "kind": "failure", "text": "{\\"error\\": \\"No electric poles found in area\\"}"}\n'
+            '{"ts": "t6", "kind": "progress", "text": "situation assessed; no infrastructure yet deployed"}\n'
+            '{"ts": "t3", "kind": "failure", "text": "Inserter faced the wrong way"}\n'
+        )
+
+        journal.append_event("doug", "failure", "Usage limit reached for 5 hour")
+        journal.append_event("doug", "failure", "stream idle timeout after 300s")
+        journal.append_event("doug", "failure", '{"error": "No electric poles found in area"}')
+        journal.append_event("doug", "progress", "situation assessed; no infrastructure yet deployed")
+        events = journal.load_events("doug")
+        rendered = journal.render_memory(events, journal.default_reflection())
+
+        self.assertEqual([event["text"] for event in events], ["Inserter faced the wrong way"])
+        self.assertIn("Inserter faced the wrong way", rendered)
+        self.assertNotIn("Usage limit", rendered)
+        self.assertNotIn("maximum number of turns", rendered)
+        self.assertNotIn("stream idle timeout", rendered)
+        self.assertNotIn("No electric poles", rendered)
+        self.assertNotIn("no infrastructure", rendered)
 
     def test_should_reflect_only_at_positive_interval_multiples(self):
         self.assertFalse(journal.should_reflect(0, interval=16))
@@ -235,6 +263,10 @@ error_tips:
             "Error: No items of that type in inventory"
         ))
         self.assertFalse(pipe._looks_like_tool_error(
+            '[{"type":"text","text":"{\\"error\\": '
+            '\\"No electric poles found in area\\"}\\n"}]'
+        ))
+        self.assertFalse(pipe._looks_like_tool_error(
             '{"allowed":false,"policy_allowed":true,"factorio_allowed":false,'
             '"entity":"burner-mining-drill","position":{"x":45,"y":-35},'
             '"factorio":{"error":"Factorio cannot place entity here"}}'
@@ -331,6 +363,44 @@ error_tips:
             mutating["hookSpecificOutput"]["permissionDecision"], "allow"
         )
 
+    def test_factorio_skill_gate_requires_skill_before_mcp_tools(self):
+        import pipe
+
+        gate = pipe.FactorioSkillGate(pipe.logger.bind(agent="test"))
+
+        blocked = asyncio.run(gate.hook(
+            {"tool_name": "mcp__factorioctl__situation_report"}, "tool-1", {}
+        ))
+        allowed_skill = asyncio.run(gate.hook(
+            {"tool_name": "Skill"}, "tool-2", {}
+        ))
+        allowed_mcp = asyncio.run(gate.hook(
+            {"tool_name": "mcp__factorioctl__situation_report"}, "tool-3", {}
+        ))
+
+        self.assertEqual(blocked["decision"], "block")
+        self.assertIn("Call Skill(factorio-control)", blocked["reason"])
+        self.assertFalse(pipe._looks_like_tool_error(blocked["reason"]))
+        self.assertEqual(
+            allowed_skill["hookSpecificOutput"]["permissionDecision"],
+            "allow",
+        )
+        self.assertEqual(allowed_mcp, {})
+
+    def test_factorio_skill_gate_is_disableable(self):
+        import pipe
+
+        gate = pipe.FactorioSkillGate(pipe.logger.bind(agent="test"), required=False)
+
+        self.assertEqual(
+            asyncio.run(gate.hook(
+                {"tool_name": "mcp__factorioctl__situation_report"},
+                "tool-1",
+                {},
+            )),
+            {},
+        )
+
     def test_max_turn_default_is_raised_and_env_tunable(self):
         import pipe
 
@@ -343,6 +413,204 @@ error_tips:
 
         with mock.patch.dict("os.environ", {"BRIDGE_MAX_TURNS": "nope"}):
             self.assertEqual(pipe._resolve_max_turns(None), 200)
+
+    def test_sdk_skills_default_to_project_skill_and_are_disableable(self):
+        import pipe
+
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(pipe._resolve_sdk_skills(None), ["factorio-control"])
+        self.assertEqual(pipe._resolve_sdk_skills("factorio-control,other"), [
+            "factorio-control",
+            "other",
+        ])
+        self.assertEqual(pipe._resolve_sdk_skills("all"), "all")
+        self.assertEqual(pipe._resolve_sdk_skills("none"), [])
+        self.assertEqual(pipe._claude_tools_for_sdk_skills(["factorio-control"]), ["Skill"])
+        self.assertEqual(pipe._claude_tools_for_sdk_skills([]), [])
+        self.assertEqual(
+            pipe._setting_sources_for_sdk_skills(["factorio-control"]),
+            ["project", "local"],
+        )
+        self.assertEqual(pipe._setting_sources_for_sdk_skills([]), ["local"])
+
+    def test_handle_message_enables_sdk_skill_without_shell_tools(self):
+        import pipe
+
+        captured = {}
+
+        def scripted_query(*, prompt, options):
+            captured["prompt"] = prompt
+            captured["options"] = options
+
+            async def gen():
+                if False:
+                    yield None
+
+            return gen()
+
+        class StubRCON:
+            def execute(self, _cmd):
+                return ""
+
+        with mock.patch("pipe.query", scripted_query):
+            pipe.handle_message(
+                "go",
+                {},
+                "system",
+                None,
+                StubRCON(),
+                0,
+                None,
+                agent_name="doug",
+                sdk_skills=["factorio-control"],
+            )
+
+        options = captured["options"]
+        self.assertEqual(options.skills, ["factorio-control"])
+        self.assertEqual(options.tools, ["Skill"])
+        self.assertEqual(options.setting_sources, ["project", "local"])
+        self.assertEqual(options.cwd, pipe._PROJECT_ROOT)
+
+    def test_sdk_skill_init_and_tool_use_are_observable(self):
+        import pipe
+        from claude_agent_sdk import ClaudeAgentOptions, SystemMessage, ToolUseBlock
+
+        class CapturingLog:
+            def __init__(self):
+                self.messages = []
+
+            def info(self, template, *args):
+                self.messages.append((template, args))
+
+        log = CapturingLog()
+        options = ClaudeAgentOptions(skills=["factorio-control"])
+
+        logged = pipe._log_sdk_init(
+            SystemMessage(
+                subtype="init",
+                data={
+                    "cwd": str(pipe._PROJECT_ROOT),
+                    "tools": ["Skill", "mcp__factorioctl__walk_to"],
+                    "skills": ["factorio-control"],
+                },
+            ),
+            options,
+            log,
+        )
+
+        self.assertTrue(logged)
+        self.assertIn("sdk init", log.messages[0][0])
+        self.assertTrue(pipe._is_skill_tool(ToolUseBlock(
+            id="s1",
+            name="Skill",
+            input={"skill": "factorio-control"},
+        )))
+
+    def test_usage_limit_reset_infers_provider_timezone_from_request_id(self):
+        import pipe
+
+        text = (
+            "API Error: Request rejected (429) · [1308][Usage limit reached "
+            "for 5 hour. Your limit will reset at 2026-06-29 08:35:15]"
+            "[202606290714523c923559680c406d]"
+        )
+        now = datetime(2026, 6, 28, 23, 14, 52, tzinfo=timezone.utc)
+
+        reset = pipe._usage_limit_reset_at(text, now)
+
+        self.assertIsNotNone(reset)
+        self.assertEqual(reset.utcoffset(), timedelta(hours=8))
+        self.assertEqual(
+            reset.astimezone(timezone.utc),
+            datetime(2026, 6, 29, 0, 35, 15, tzinfo=timezone.utc),
+        )
+
+    def test_usage_limit_cooldown_blocks_human_message_without_model_call(self):
+        import queue as std_queue
+
+        import pipe
+
+        class StubRCON:
+            def __init__(self):
+                self.commands = []
+
+            def execute(self, cmd):
+                self.commands.append(cmd)
+                return ""
+
+        reset = datetime.now(timezone.utc) + timedelta(hours=1)
+        pipe._USAGE_LIMIT_COOLDOWNS.clear()
+        pipe._USAGE_LIMIT_COOLDOWNS["doug"] = reset
+        self.addCleanup(pipe._USAGE_LIMIT_COOLDOWNS.clear)
+
+        thread = pipe.AgentThread.__new__(pipe.AgentThread)
+        thread.agent_name = "doug"
+        thread.telemetry_name = "doug"
+        thread.telemetry = None
+        thread.rcon = StubRCON()
+        thread.log = pipe.logger.bind(agent="doug")
+        thread.heartbeat_interval = 0
+        thread.inbox = std_queue.Queue()
+        thread.inbox.put({
+            "message": "hi",
+            "player_index": 1,
+            "player_name": "giga",
+        })
+
+        with mock.patch("pipe.handle_message", side_effect=AssertionError("called model")):
+            thread._run_once()
+
+        joined = "\n".join(thread.rcon.commands)
+        self.assertIn("Provider usage limit is active", joined)
+        self.assertIn("Ready", joined)
+
+    def test_run_agent_records_usage_limit_cooldown_without_failure_event(self):
+        import asyncio
+
+        import pipe
+        from claude_agent_sdk import ResultMessage
+
+        provider_now = datetime.now(timezone.utc) + timedelta(hours=8)
+        provider_reset = provider_now + timedelta(hours=1)
+        limit_text = (
+            "API Error: Request rejected (429) · [1308][Usage limit reached "
+            f"for 5 hour. Your limit will reset at {provider_reset:%Y-%m-%d %H:%M:%S}]"
+            f"[{provider_now:%Y%m%d%H%M%S}abcdef]"
+        )
+        messages = [
+            ResultMessage(
+                subtype="error",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=True,
+                num_turns=1,
+                session_id="s",
+                result=limit_text,
+                total_cost_usd=0.0,
+            )
+        ]
+
+        def scripted_query(*, prompt, options):
+            async def gen():
+                for msg in messages:
+                    yield msg
+            return gen()
+
+        class StubRCON:
+            def execute(self, _cmd):
+                return ""
+
+        pipe._USAGE_LIMIT_COOLDOWNS.clear()
+        self.addCleanup(pipe._USAGE_LIMIT_COOLDOWNS.clear)
+
+        with mock.patch("pipe.query", scripted_query):
+            asyncio.run(pipe._run_agent(
+                "go", object(), "doug", None, "doug",
+                StubRCON(), 0, pipe.logger.bind(agent="doug"),
+            ))
+
+        self.assertEqual(journal.load_events("doug"), [])
+        self.assertIsNotNone(pipe._get_usage_limit_cooldown("doug"))
 
     def test_run_agent_journals_sdk_tool_result_failures(self):
         # The whole point of the SDK migration: tool failures arrive as

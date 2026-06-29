@@ -3074,6 +3074,26 @@ rcon.print(helpers.table_to_json(result))
         .to_string()
     }
 
+    /// Diagnose steam-power fluid and electric connectivity in an area.
+    pub fn diagnose_steam_power(x: i32, y: i32, radius: u32) -> String {
+        format!(
+            r#"
+if remote.interfaces["claude_interface"] and remote.interfaces["claude_interface"]["diagnose_steam_power"] then
+    rcon.print(remote.call("claude_interface", "diagnose_steam_power", {}, {}, {}))
+else
+    rcon.print(helpers.table_to_json({{
+        error = "claude-interface mod does not expose diagnose_steam_power",
+        action_needed = "sync_or_restart_mod",
+        guidance = "Run just sync/resume so the updated claude-interface mod is loaded before using steam diagnostics."
+    }}))
+end
+"#,
+            x, y, radius
+        )
+        .trim()
+        .to_string()
+    }
+
     /// Get power coverage data for map visualization
     pub fn get_power_coverage(x: i32, y: i32, radius: u32) -> String {
         format!(

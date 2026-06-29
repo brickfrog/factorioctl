@@ -1,6 +1,7 @@
 import importlib
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -63,6 +64,28 @@ progress: Placed the first drill
 
         self.assertEqual(ledger.load_ledger("doug"), saved)
         self.assertTrue((self.base / ".ledger-doug.json").read_text().endswith("\n"))
+
+    def test_stale_bootstrap_ledger_returns_default(self):
+        stale = {
+            "objective": "Establish initial extraction infrastructure on iron patch",
+            "plan_steps": ["place_entity burner-mining-drill on iron ore"],
+            "progress_notes": ["situation assessed; no infrastructure yet deployed"],
+            "updated_at": (datetime.now() - timedelta(hours=2)).isoformat(),
+        }
+        recent = {
+            **stale,
+            "updated_at": datetime.now().isoformat(),
+        }
+
+        with mock.patch.dict(
+            "os.environ",
+            {"BRIDGE_STALE_BOOTSTRAP_LEDGER_MAX_AGE_S": "60"},
+        ):
+            ledger.save_ledger("doug", stale)
+            self.assertEqual(ledger.load_ledger("doug"), ledger.default_ledger())
+
+            ledger.save_ledger("doug", recent)
+            self.assertEqual(ledger.load_ledger("doug"), recent)
 
     def test_apply_update_replaces_plan_for_new_objective_and_caps_progress(self):
         for i in range(11):

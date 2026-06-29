@@ -75,6 +75,21 @@ pub enum PowerSubcommand {
         #[arg(long, default_value = "50")]
         radius: u32,
     },
+
+    /// Diagnose steam power fluid and grid connectivity in an area
+    Steam {
+        /// Center X coordinate
+        #[arg(long, allow_hyphen_values = true)]
+        x: i32,
+
+        /// Center Y coordinate
+        #[arg(long, allow_hyphen_values = true)]
+        y: i32,
+
+        /// Search radius
+        #[arg(long, default_value = "50")]
+        radius: u32,
+    },
 }
 
 pub async fn execute(cmd: PowerCommand, conn: &ResolvedConnectionArgs) -> Result<()> {
@@ -184,6 +199,12 @@ pub async fn execute(cmd: PowerCommand, conn: &ResolvedConnectionArgs) -> Result
 
         PowerSubcommand::Networks { x, y, radius } => {
             let lua = LuaCommand::get_power_networks(x, y, radius);
+            let response = client.execute_lua(&lua).await?;
+            println!("{}", response);
+        }
+
+        PowerSubcommand::Steam { x, y, radius } => {
+            let lua = LuaCommand::diagnose_steam_power(x, y, radius);
             let response = client.execute_lua(&lua).await?;
             println!("{}", response);
         }

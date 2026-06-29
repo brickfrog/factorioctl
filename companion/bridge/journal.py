@@ -10,6 +10,17 @@ from pathlib import Path
 REFLECTION_RE = re.compile(r"<reflection>(.*?)</reflection>", re.DOTALL | re.IGNORECASE)
 EVENT_KINDS = {"progress", "failure", "discovery", "milestone"}
 MAX_REFLECTION_ITEMS = 12
+TRANSIENT_FAILURE_PATTERNS = (
+    "usage limit reached",
+    "request rejected (429)",
+    "reached maximum number of turns",
+    "expected value at line 1 column 1",
+    "stream idle timeout",
+    "no electric poles found in area",
+)
+LOW_VALUE_PROGRESS_PATTERNS = (
+    "no infrastructure yet deployed",
+)
 
 
 def _journal_file(agent_name: str) -> Path:
@@ -46,8 +57,33 @@ def _normalize(data: dict) -> dict:
     }
 
 
+def _is_transient_failure_text(text: str) -> bool:
+    normalized = str(text).lower()
+    return any(pattern in normalized for pattern in TRANSIENT_FAILURE_PATTERNS)
+
+
+def _is_transient_failure_event(kind: str, text: str) -> bool:
+    return kind == "failure" and _is_transient_failure_text(text)
+
+
+def _is_low_value_progress_event(kind: str, text: str) -> bool:
+    if kind != "progress":
+        return False
+    normalized = str(text).lower()
+    return any(pattern in normalized for pattern in LOW_VALUE_PROGRESS_PATTERNS)
+
+
+def _should_drop_event(kind: str, text: str) -> bool:
+    return (
+        _is_transient_failure_event(kind, text)
+        or _is_low_value_progress_event(kind, text)
+    )
+
+
 def append_event(agent_name: str, kind: str, text: str) -> None:
     kind = kind if kind in EVENT_KINDS else "progress"
+    if _should_drop_event(kind, text):
+        return None
     event = {
         "ts": datetime.now().isoformat(),
         "kind": kind,
@@ -76,10 +112,14 @@ def load_events(agent_name: str, limit: int = 20) -> list[dict]:
             continue
         if not isinstance(data, dict):
             continue
+        kind = data.get("kind") if data.get("kind") in EVENT_KINDS else "progress"
+        text = str(data.get("text", ""))
+        if _should_drop_event(kind, text):
+            continue
         events.append({
             "ts": str(data.get("ts", "")),
-            "kind": data.get("kind") if data.get("kind") in EVENT_KINDS else "progress",
-            "text": str(data.get("text", "")),
+            "kind": kind,
+            "text": text,
         })
 
     try:
@@ -212,6 +252,13 @@ def render_memory(events: list[dict], reflection: dict) -> str:
     events = events if isinstance(events, list) else []
     reflection = reflection if isinstance(reflection, dict) else {}
     recent_events = [e for e in events[-5:] if isinstance(e, dict)]
+    recent_events = [
+        e for e in recent_events
+        if not _is_transient_failure_event(
+            e.get("kind") if e.get("kind") in EVENT_KINDS else "progress",
+            str(e.get("text", "")),
+        )
+    ]
     structures = _str_list(reflection.get("structures", []))
     error_tips = _str_list(reflection.get("error_tips", []))
     if not recent_events and not structures and not error_tips:

@@ -230,6 +230,10 @@ fn all_lua_cases() -> Vec<LuaCase> {
             LuaCommand::find_power_issues(34, 35, 12),
         ),
         LuaCase::new(
+            "diagnose_steam_power",
+            LuaCommand::diagnose_steam_power(35, 36, 12),
+        ),
+        LuaCase::new(
             "get_power_coverage",
             LuaCommand::get_power_coverage(36, 37, 13),
         ),
@@ -721,6 +725,74 @@ fn placement_diagnostics_are_structured_for_fluid_entities() {
             && search.contains("table.sort(placements")
             && search.contains("truncated = #placements > #returned"),
         "find_entity_placements should scan all cardinal directions and return nearest candidates:\n{search}"
+    );
+}
+
+#[test]
+fn steam_power_diagnostic_uses_mod_remote_not_inline_lua() {
+    let lua = LuaCommand::diagnose_steam_power(-25, 50, 20);
+
+    assert!(
+        lua.contains(r#"remote.interfaces["claude_interface"]["diagnose_steam_power"]"#)
+            && lua.contains(
+                r#"remote.call("claude_interface", "diagnose_steam_power", -25, 50, 20)"#
+            ),
+        "diagnose_steam_power should be a small guarded mod remote call:\n{lua}"
+    );
+    assert!(
+        lua.contains("sync_or_restart_mod"),
+        "diagnose_steam_power should explain an out-of-date mod instead of silently falling back:\n{lua}"
+    );
+    for forbidden in [
+        "get_fluid_box_neighbours",
+        "get_fluid_box_pipe_connections",
+        "has_fluid_segment",
+        "boiler_steam_output_blocked",
+    ] {
+        assert!(
+            !lua.contains(forbidden),
+            "diagnose_steam_power Rust wrapper should not embed heavy Lua {forbidden:?}:\n{lua}"
+        );
+    }
+}
+
+#[test]
+fn steam_power_diagnostic_lives_in_mod_remote_interface() {
+    let control_lua = include_str!("../companion/mod/claude-interface/control.lua");
+
+    assert!(
+        control_lua.contains("local function diagnose_steam_power_impl")
+            && control_lua.contains("diagnose_steam_power = function(x, y, radius)"),
+        "claude-interface control.lua should expose the steam diagnostic remote"
+    );
+
+    for required in [
+        "get_fluid_capacity",
+        "get_fluid_filter",
+        "get_fluid(",
+        "has_fluid_segment",
+        "get_fluid_segment_id",
+        "get_fluid_segment_fluid",
+        "get_fluid_segment_capacity",
+        "get_fluid_segment_extent_bounding_box",
+        "get_fluid_box_neighbours",
+        "get_fluid_box_pipe_connections",
+        "boiler_steam_output_blocked",
+        "steam_engine_no_steam",
+        "steam_engine_not_on_grid",
+        "offshore-pump",
+        "boiler",
+        "steam-engine",
+    ] {
+        assert!(
+            control_lua.contains(required),
+            "control.lua steam diagnostic should include {required:?}"
+        );
+    }
+
+    assert!(
+        control_lua.contains("return helpers.table_to_json(result_or_error)"),
+        "remote diagnostic should return JSON to the RCON wrapper"
     );
 }
 

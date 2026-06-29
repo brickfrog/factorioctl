@@ -176,7 +176,7 @@ outcome: verified starter steam power online
         skills.save_library(None)
         self.assertIn("build_burner_mining_setup", self._names(skills.load_library()))
 
-    def test_finalize_reply_applies_and_strips_skill_block(self):
+    def test_finalize_reply_strips_legacy_skill_block_without_persisting(self):
         import pipe
 
         finalized = pipe._finalize_reply(
@@ -193,12 +193,9 @@ outcome: lab ready for science
         )
 
         self.assertEqual(finalized, "Done.")
-        self.assertEqual(
-            skills.get_skill(skills.load_library(), "feed_lab_fast")["outcome"],
-            "lab ready for science",
-        )
+        self.assertIsNone(skills.get_skill(skills.load_library(), "feed_lab_fast"))
 
-    def test_autonomy_tick_injects_skill_signatures_and_nudge(self):
+    def test_autonomy_tick_does_not_inject_legacy_skill_library(self):
         import pipe
 
         skills.apply_skill_update(
@@ -225,14 +222,12 @@ outcome: lab ready for science
 
         prompt = thread._compose_autonomy_prompt()
 
-        self.assertIn("feed_lab_fast(lab_pos)", prompt)
-        self.assertIn("Prefer reusing an existing skill", prompt)
-        self.assertIn("<skill>", prompt)
-        self.assertIn("name: lay_smelting_line", prompt)
+        self.assertNotIn("Available skills", prompt)
+        self.assertNotIn("feed_lab_fast(lab_pos)", prompt)
+        self.assertNotIn("Prefer reusing an existing skill", prompt)
+        self.assertNotIn("<skill>", prompt)
 
-    def test_execution_tick_keeps_skill_list_but_drops_full_format(self):
-        # On a cheap execution tick the compact skill LIST is injected, but the
-        # verbose save-a-new-skill <skill> format example is planner-only.
+    def test_execution_tick_does_not_inject_legacy_skill_library(self):
         import ledger
         import pipe
 
@@ -261,7 +256,8 @@ outcome: lab ready for science
 
         prompt = thread._compose_autonomy_prompt()
 
-        self.assertIn("feed_lab_fast(lab_pos)", prompt)
+        self.assertNotIn("Available skills", prompt)
+        self.assertNotIn("feed_lab_fast(lab_pos)", prompt)
         self.assertNotIn("name: lay_smelting_line", prompt)
         self.assertNotIn("save it as a <skill> block", prompt)
 

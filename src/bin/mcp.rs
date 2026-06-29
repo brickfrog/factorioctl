@@ -2512,6 +2512,28 @@ impl FactorioMcp {
         self.with_player_messages(result).await
     }
 
+    /// Diagnose steam-power fluid and electric connectivity.
+    #[tool(
+        description = "Diagnose a steam-power build before modifying it. Reports offshore pumps, boilers, steam engines, pipes, electric poles, fluidbox/segment connectivity, fuel, statuses, and suggested actions. Use this before placing/removing fluid entities or rebuilding power."
+    )]
+    async fn diagnose_steam_power(&self, Parameters(params): Parameters<AreaParams>) -> String {
+        let mut client = match self.connect().await {
+            Ok(c) => c,
+            Err(e) => return self.with_player_messages(format!("Error: {}", e)).await,
+        };
+
+        let lua = factorioctl::client::lua::LuaCommand::diagnose_steam_power(
+            params.x,
+            params.y,
+            params.radius,
+        );
+        let result = match client.execute_lua(&lua).await {
+            Ok(result) => result,
+            Err(e) => format!("Error: {}", e),
+        };
+        self.with_player_messages(result).await
+    }
+
     // --- Alert Tools ---
 
     /// Get alerts for urgent conditions.

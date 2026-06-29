@@ -31,6 +31,7 @@ done
 GROUP="${GROUP:-doug-squad}"
 SCALE="${SCALE:-1}"
 MODEL="${MODEL:-}"
+AUTONOMY_REQUIRES_PLAYER="${AUTONOMY_REQUIRES_PLAYER:-false}"
 EXTRA_ARGS=""
 
 if [ -n "$MODEL" ]; then
@@ -62,6 +63,14 @@ start_bridge() {
     if [ "$FRESH" = true ]; then
         flags="$flags --setup-surfaces"
     fi
+    case "${AUTONOMY_REQUIRES_PLAYER,,}" in
+        1|true|yes|on)
+            flags="$flags --autonomy-requires-player"
+            ;;
+        *)
+            flags="$flags --no-autonomy-requires-player"
+            ;;
+    esac
     echo ""
     echo "Starting bridge (scale=$SCALE)..."
     exec uv run --project "$PROJECT_ROOT" python "$PROJECT_ROOT/bridge/pipe.py" $flags $EXTRA_ARGS
@@ -124,6 +133,7 @@ case "$CMD" in
         echo "                     1=nauvis  2=+vulcanus  3=+fulgora  4=+gleba  5=+aquilo"
         echo "  GROUP=doug-squad   Agent group (default: doug-squad)"
         echo "  MODEL=sonnet       Claude model override"
+        echo "  AUTONOMY_REQUIRES_PLAYER=true  Wait for a connected player before autonomy"
         exit 1
         ;;
 esac

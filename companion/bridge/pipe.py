@@ -22,7 +22,7 @@ import shutil
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -97,8 +97,7 @@ from journal import (append_event, apply_reflection_update, count_events,
                      load_events, load_reflection, render_memory,
                      should_reflect, strip_reflection_trailer)
 from planner import build_autonomy_prompt, choose_autonomy_mode
-from skills import (apply_skill_update, load_library, render_skills,
-                    strip_skill_trailer)
+from skills import strip_skill_trailer
 from rcon import RCONClient, ThreadSafeRCON, lua_long_string
 from paths import find_script_output, find_factorioctl_mcp
 from transport import (InputWatcher, send_response, send_tool_status, set_status,
@@ -108,11 +107,21 @@ from paths import find_mod_source, find_mods_dir
 from telemetry import SSEBroadcaster, start_sse_server, RelayPusher, Telemetry, emit_chat, emit_tool_call, emit_error, emit_status
 
 _BRIDGE_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _BRIDGE_DIR.parent.parent
 _PLAYER_MESSAGES_MARKER = "\n\n--- Player Messages ---\n"
 DEFAULT_MAX_TURNS = 200
+DEFAULT_SDK_SKILLS = "factorio-control"
 SESSIONS_FILE = _BRIDGE_DIR / ".sessions.json"
 _RCON_PRINT = "rcon." + "pr" + "int"
 _MCP_TOOL_PREFIX = "mcp__factorioctl__"
+_USAGE_LIMIT_RESET_RE = re.compile(
+    r"Usage limit reached.*?reset at "
+    r"(?P<reset>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})",
+    re.IGNORECASE,
+)
+_PROVIDER_TIMESTAMP_RE = re.compile(r"\[(?P<stamp>\d{14})[^\]]*\]")
+_USAGE_LIMIT_COOLDOWNS: dict[str, datetime] = {}
+_USAGE_LIMIT_COOLDOWNS_LOCK = threading.Lock()
 
 # ── Agent profiles ───────────────────────────────────────────
 
@@ -415,6 +424,9 @@ _MUTATING_FACTORIO_TOOLS = {
 _PARALLEL_MUTATION_GUARD_PREFIX = (
     "Factorioctl bridge blocked parallel mutating tool call:"
 )
+_SKILL_REQUIRED_GUARD_PREFIX = (
+    "Factorioctl bridge blocked Factorio tool before control skill:"
+)
 
 
 def _short_factorio_tool_name(tool_name: str) -> str:
@@ -427,11 +439,16 @@ def _is_mutating_factorio_tool(tool_name: str) -> bool:
     return _short_factorio_tool_name(tool_name) in _MUTATING_FACTORIO_TOOLS
 
 
+def _is_factorio_mcp_tool(tool_name: str) -> bool:
+    return str(tool_name).startswith(_MCP_TOOL_PREFIX)
+
+
 def _is_operator_only_tool_refusal(text: str) -> bool:
     stripped = str(text).strip()
     return (
         stripped.startswith("Error: execute_lua is disabled.")
         or stripped.startswith(_PARALLEL_MUTATION_GUARD_PREFIX)
+        or stripped.startswith(_SKILL_REQUIRED_GUARD_PREFIX)
     )
 
 
@@ -439,6 +456,8 @@ def _is_benign_tool_miss(text: str) -> bool:
     return str(text).strip().lower() in {
         "error: no items of that type in inventory",
         "no items of that type in inventory",
+        "error: no electric poles found in area",
+        "no electric poles found in area",
     }
 
 
@@ -508,6 +527,58 @@ class MutatingToolBatchGate:
         }
 
 
+class FactorioSkillGate:
+    """Require the SDK control skill before exposing Factorio MCP actions."""
+
+    def __init__(self, log, required: bool = True):
+        self.log = log
+        self.required = required
+        self._lock = asyncio.Lock()
+        self._saw_skill = False
+
+    async def hook(
+        self,
+        hook_input: Any,
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        tool_name = str(_hook_value(hook_input, "tool_name") or "")
+        if not self.required or not tool_name:
+            return {}
+
+        async with self._lock:
+            if tool_name == "Skill":
+                self._saw_skill = True
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                    }
+                }
+
+            if _is_factorio_mcp_tool(tool_name) and not self._saw_skill:
+                short_name = _short_factorio_tool_name(tool_name)
+                message = (
+                    f"{_SKILL_REQUIRED_GUARD_PREFIX} {short_name}. "
+                    "Call Skill(factorio-control) before using Factorio MCP tools."
+                )
+                self.log.debug(
+                    "blocked Factorio MCP tool before skill: {}",
+                    short_name,
+                )
+                return {
+                    "decision": "block",
+                    "reason": message,
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": message,
+                    },
+                }
+
+        return {}
+
+
 def _hook_value(hook_input: Any, key: str) -> Any:
     if isinstance(hook_input, dict):
         return hook_input.get(key)
@@ -537,6 +608,8 @@ def _json_payload_has_error(value: Any) -> bool:
         for key, item in value.items():
             key_lower = str(key).lower()
             if key_lower == "error" and item:
+                if _is_benign_tool_miss(str(item)):
+                    return False
                 return True
             if key_lower == "success" and item is False:
                 reason = (
@@ -666,6 +739,178 @@ def _resolve_max_turns(value: Any = None) -> int:
     return turns if turns > 0 else DEFAULT_MAX_TURNS
 
 
+def _resolve_sdk_skills(value: Any = None) -> list[str] | str:
+    if value is None:
+        value = os.environ.get("BRIDGE_SDK_SKILLS", DEFAULT_SDK_SKILLS)
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    raw = str(value).strip()
+    if not raw:
+        return []
+    lowered = raw.lower()
+    if lowered in {"0", "false", "no", "none", "off", "disabled"}:
+        return []
+    if lowered == "all":
+        return "all"
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _claude_tools_for_sdk_skills(skills: list[str] | str) -> list[str]:
+    # The SDK documents `skills=` as auto-configuring the Skill tool, but the
+    # Claude Code init stream used by this bridge still reports `skill_tool=no`
+    # without this explicit entry. Keep the explicit tool until the live init
+    # payload proves the native path works here.
+    return ["Skill"] if skills else []
+
+
+def _setting_sources_for_sdk_skills(skills: list[str] | str) -> list[str] | None:
+    return ["project", "local"] if skills else ["local"]
+
+
+def _bounded_list_for_log(value: Any, limit: int = 12) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items = [str(item) for item in value[:limit]]
+    if len(value) > limit:
+        items.append(f"...+{len(value) - limit}")
+    return items
+
+
+def _log_sdk_init(msg: SystemMessage, options: ClaudeAgentOptions, log) -> bool:
+    if getattr(msg, "subtype", None) != "init":
+        return False
+    data = getattr(msg, "data", None)
+    if not isinstance(data, dict):
+        return False
+    tools = data.get("tools", [])
+    visible_skills = data.get("skills", [])
+    skill_tool = isinstance(tools, list) and "Skill" in tools
+    log.info(
+        "sdk init: cwd={} skill_tool={} configured_skills={} visible_skills={}",
+        data.get("cwd"),
+        "yes" if skill_tool else "no",
+        options.skills if options.skills is not None else "default",
+        _bounded_list_for_log(visible_skills),
+    )
+    return True
+
+
+def _is_skill_tool(block: ToolUseBlock) -> bool:
+    return block.name == "Skill" or block.name.endswith("__Skill")
+
+
+def _parse_utc_offset(value: str | None) -> timezone:
+    raw = str(value or "+08:00").strip()
+    match = re.fullmatch(r"([+-])(\d{1,2})(?::?(\d{2}))?", raw)
+    if not match:
+        return timezone(timedelta(hours=8))
+    sign, hours_raw, minutes_raw = match.groups()
+    hours = int(hours_raw)
+    minutes = int(minutes_raw or "0")
+    if hours > 23 or minutes > 59:
+        return timezone(timedelta(hours=8))
+    delta = timedelta(hours=hours, minutes=minutes)
+    if sign == "-":
+        delta = -delta
+    return timezone(delta)
+
+
+def _infer_provider_timezone(text: str, now: datetime | None = None) -> timezone | None:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.astimezone()
+    now_utc_naive = now.astimezone(timezone.utc).replace(tzinfo=None)
+    for stamp in reversed(_PROVIDER_TIMESTAMP_RE.findall(str(text))):
+        try:
+            provider_naive = datetime.strptime(stamp, "%Y%m%d%H%M%S")
+        except ValueError:
+            continue
+        delta_minutes = round((provider_naive - now_utc_naive).total_seconds() / 60)
+        rounded_minutes = int(round(delta_minutes / 15) * 15)
+        if -12 * 60 <= rounded_minutes <= 14 * 60:
+            return timezone(timedelta(minutes=rounded_minutes))
+    return None
+
+
+def _usage_limit_reset_at(text: str, now: datetime | None = None) -> datetime | None:
+    match = _USAGE_LIMIT_RESET_RE.search(str(text))
+    if not match:
+        return None
+    try:
+        reset_naive = datetime.strptime(match.group("reset"), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    provider_tz = (
+        _infer_provider_timezone(text, now)
+        or _parse_utc_offset(os.environ.get("BRIDGE_USAGE_LIMIT_RESET_UTC_OFFSET"))
+    )
+    return reset_naive.replace(tzinfo=provider_tz)
+
+
+def _format_local_time(moment: datetime) -> str:
+    local = moment.astimezone()
+    zone = local.tzname() or local.strftime("%z")
+    return f"{local:%Y-%m-%d %H:%M:%S} {zone}"
+
+
+def _usage_limit_message(reset_at: datetime) -> str:
+    return (
+        "Provider usage limit is active. "
+        f"Agent attempts will resume after {_format_local_time(reset_at)}."
+    )
+
+
+def _set_usage_limit_cooldown(
+    agent_name: str,
+    text: str,
+    log=None,
+    now: datetime | None = None,
+) -> datetime | None:
+    reset_at = _usage_limit_reset_at(text, now)
+    if not reset_at:
+        return None
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.astimezone()
+    if reset_at <= now:
+        return None
+
+    changed = False
+    with _USAGE_LIMIT_COOLDOWNS_LOCK:
+        existing = _USAGE_LIMIT_COOLDOWNS.get(agent_name)
+        if existing is None or reset_at > existing:
+            _USAGE_LIMIT_COOLDOWNS[agent_name] = reset_at
+            changed = True
+        else:
+            reset_at = existing
+    if log and changed:
+        log.info(
+            "provider usage limit active until {}; pausing agent attempts",
+            _format_local_time(reset_at),
+        )
+    return reset_at
+
+
+def _get_usage_limit_cooldown(
+    agent_name: str,
+    now: datetime | None = None,
+) -> datetime | None:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.astimezone()
+    with _USAGE_LIMIT_COOLDOWNS_LOCK:
+        reset_at = _USAGE_LIMIT_COOLDOWNS.get(agent_name)
+        if not reset_at:
+            return None
+        if reset_at <= now:
+            _USAGE_LIMIT_COOLDOWNS.pop(agent_name, None)
+            return None
+        return reset_at
+
+
 def _record_anomaly(reply: str, agent_name: str) -> None:
     sections = parse_response(reply)
     data = sections.get("data") if isinstance(sections, dict) else None
@@ -680,9 +925,41 @@ def _record_anomaly(reply: str, agent_name: str) -> None:
 
 
 # Hard wall-clock cap on a single agent tick. The SDK's max_turns bounds tool
-# turns, not a stalled TCP connection or a GLM response that never yields, so a
-# tick is also wrapped in asyncio.wait_for. Override via BRIDGE_TICK_TIMEOUT_S.
+# turns, not a stalled TCP connection or a model response that never yields, so
+# a tick is also wrapped in asyncio.wait_for. Override via BRIDGE_TICK_TIMEOUT_S.
 _TICK_TIMEOUT_S = float(os.environ.get("BRIDGE_TICK_TIMEOUT_S", "2400"))
+
+# A long tick is fine if the SDK keeps emitting messages, but a long silent gap
+# after a tool result leaves the game looking dropped. Abort that invocation and
+# let the bridge resume on the next autonomy tick.
+_STREAM_IDLE_TIMEOUT_S = float(os.environ.get("BRIDGE_STREAM_IDLE_TIMEOUT_S", "300"))
+
+
+class AgentStreamIdleTimeout(TimeoutError):
+    pass
+
+
+async def _query_with_idle_timeout(prompt: str, options: ClaudeAgentOptions):
+    stream = query(prompt=prompt, options=options)
+    iterator = stream.__aiter__()
+    try:
+        while True:
+            try:
+                msg = await asyncio.wait_for(
+                    iterator.__anext__(),
+                    timeout=_STREAM_IDLE_TIMEOUT_S,
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError as exc:
+                raise AgentStreamIdleTimeout(
+                    f"agent stream idle for {_STREAM_IDLE_TIMEOUT_S:.0f}s"
+                ) from exc
+            yield msg
+    finally:
+        aclose = getattr(iterator, "aclose", None)
+        if callable(aclose):
+            await aclose()
 
 
 def _stderr_callback(log):
@@ -710,17 +987,21 @@ async def _run_agent(
     text_parts: list[str] = []
     new_session_id: str | None = None
 
-    async for msg in query(prompt=prompt, options=options):
+    async for msg in _query_with_idle_timeout(prompt=prompt, options=options):
         if isinstance(msg, AssistantMessage):
             if msg.session_id:
                 new_session_id = msg.session_id
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     text_parts.append(block.text)
+                    _set_usage_limit_cooldown(agent_name, block.text, log)
                     log.info("text: {}", block.text.strip())
                 elif isinstance(block, ToolUseBlock):
                     display = _short_tool_name(block.name)
-                    log.debug("tool: {}({})", display, _json_for_log(block.input))
+                    if _is_skill_tool(block):
+                        log.info("skill: {}({})", display, _json_for_log(block.input))
+                    else:
+                        log.debug("tool: {}({})", display, _json_for_log(block.input))
                     emit_tool_call(telemetry, display, block.input, agent=telemetry_name)
                     if display.endswith("broadcast_thought"):
                         thought = block.input.get("message", "")
@@ -770,8 +1051,9 @@ async def _run_agent(
                 text_parts.append(msg.result)
             if msg.is_error:
                 detail = msg.result or "; ".join(msg.errors or []) or "agent result marked as error"
-                log.warning("result ERROR: {}", detail)
-                append_event(agent_name, "failure", _short_event_text(detail))
+                if not _set_usage_limit_cooldown(agent_name, detail, log):
+                    log.warning("result ERROR: {}", detail)
+                    append_event(agent_name, "failure", _short_event_text(detail))
             if msg.total_cost_usd is not None:
                 log.info(
                     "done: ${:.4f} | {} turns | {:.1f}s",
@@ -790,7 +1072,8 @@ async def _run_agent(
                         "agent": telemetry_name,
                     })
         elif isinstance(msg, SystemMessage):
-            log.debug("system: {}", msg)
+            if not _log_sdk_init(msg, options, log):
+                log.debug("system: {}", msg)
         else:
             log.debug("stream event: {}", msg)
 
@@ -805,7 +1088,6 @@ def _finalize_reply(reply: str, agent_name: str) -> str:
     ledger_update = parse_ledger_trailer(reply)
     apply_ledger_update(agent_name, reply)
     apply_reflection_update(agent_name, reply)
-    apply_skill_update(reply)
     if ledger_update and ledger_update.get("progress"):
         append_event(agent_name, "progress", ledger_update["progress"])
     _record_anomaly(reply, agent_name)
@@ -830,6 +1112,7 @@ def handle_message(
     response_to: str | None = None,
     model: str | None = None,
     max_turns: int | None = None,
+    sdk_skills: list[str] | str | None = None,
 ) -> str | None:
     """Pipe a message through the Claude SDK. Returns new session_id.
     agent_name: registered agent name (for RCON/mod).
@@ -844,20 +1127,36 @@ def handle_message(
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
     mutating_tool_gate = MutatingToolBatchGate(log)
+    resolved_sdk_skills = (
+        _resolve_sdk_skills(sdk_skills)
+        if sdk_skills is not None
+        else _resolve_sdk_skills()
+    )
+    factorio_skill_gate = FactorioSkillGate(
+        log,
+        required="factorio-control" in resolved_sdk_skills,
+    )
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
         model=model,
         max_turns=_resolve_max_turns(max_turns),
         mcp_servers=mcp_config,
         strict_mcp_config=True,
-        tools=[],
+        tools=_claude_tools_for_sdk_skills(resolved_sdk_skills),
         disallowed_tools=_disallowed_tools_for_env(env),
         permission_mode="bypassPermissions",
         resume=session_id,
-        setting_sources=["local"],
+        setting_sources=_setting_sources_for_sdk_skills(resolved_sdk_skills),
+        cwd=_PROJECT_ROOT,
+        skills=resolved_sdk_skills,
         env=env,
         hooks={
-            "PreToolUse": [HookMatcher(hooks=[mutating_tool_gate.hook])],
+            "PreToolUse": [
+                HookMatcher(hooks=[
+                    factorio_skill_gate.hook,
+                    mutating_tool_gate.hook,
+                ])
+            ],
         },
         stderr=_stderr_callback(log),
     )
@@ -877,6 +1176,27 @@ def handle_message(
                 timeout=_TICK_TIMEOUT_S,
             )
         )
+        cooldown_until = _get_usage_limit_cooldown(agent_name)
+        if cooldown_until and any(_USAGE_LIMIT_RESET_RE.search(part) for part in text_parts):
+            text_parts = [_usage_limit_message(cooldown_until)]
+    except AgentStreamIdleTimeout:
+        error_msg = (
+            f"Error: agent stream was idle for {_STREAM_IDLE_TIMEOUT_S:.0f}s "
+            "and was aborted"
+        )
+        log.error(
+            "agent stream idle timeout after {:.0f}s; aborting invocation",
+            _STREAM_IDLE_TIMEOUT_S,
+        )
+        append_event(
+            agent_name, "failure",
+            _short_event_text(f"stream idle timeout after {_STREAM_IDLE_TIMEOUT_S:.0f}s"),
+        )
+        emit_error(telemetry, error_msg, agent=tname)
+        if player_index > 0:
+            send_response(rcon, player_index, rcon_target, error_msg)
+            set_status(rcon, player_index, "[color=0.4,0.8,0.4]Ready[/color]")
+        return session_id
     except (asyncio.TimeoutError, TimeoutError):
         error_msg = f"Error: agent tick exceeded {_TICK_TIMEOUT_S:.0f}s and was aborted"
         log.error("agent tick timed out after {:.0f}s; aborting", _TICK_TIMEOUT_S)
@@ -899,8 +1219,19 @@ def handle_message(
         return session_id
     except Exception as e:
         error_msg = f"Error: {e}"
+        cooldown_until = (
+            _set_usage_limit_cooldown(agent_name, str(e), log)
+            or _get_usage_limit_cooldown(agent_name)
+        )
         if _is_sdk_terminal_error_echo(str(e)):
-            log.warning("agent invocation ended after SDK terminal result: {}", e)
+            if cooldown_until:
+                log.debug(
+                    "agent invocation paused by provider usage limit until {}",
+                    _format_local_time(cooldown_until),
+                )
+                error_msg = _usage_limit_message(cooldown_until)
+            else:
+                log.warning("agent invocation ended after SDK terminal result: {}", e)
         else:
             log.exception("agent invocation failed")
             append_event(agent_name, "failure", _short_event_text(str(e)))
@@ -1006,7 +1337,8 @@ class AgentThread:
                  heartbeat_interval: float = 0.0,
                  planner_interval: int = 5,
                  autonomy_requires_player: bool = True,
-                 max_turns: int | None = None):
+                 max_turns: int | None = None,
+                 sdk_skills: list[str] | str | None = None):
         self.agent = agent
         self.agent_name = agent["name"]
         self.system_prompt = agent["system_prompt"]
@@ -1016,6 +1348,11 @@ class AgentThread:
         self.model = model or agent.get("model") or "haiku"
         self.max_turns = _resolve_max_turns(
             max_turns if max_turns is not None else agent.get("max_turns")
+        )
+        self.sdk_skills = (
+            _resolve_sdk_skills(sdk_skills)
+            if sdk_skills is not None
+            else _resolve_sdk_skills(agent.get("sdk_skills"))
         )
         self.telemetry_name = agent.get("telemetry_name", self.agent_name)
         self.log = logger.bind(agent=self.telemetry_name)
@@ -1029,10 +1366,13 @@ class AgentThread:
         self.heartbeat_interval = float(
             agent.get("heartbeat_interval", heartbeat_interval)
         )
-        self._exec_ticks_since_plan = 0
         self._planner_interval = int(
             agent.get("planner_interval", planner_interval)
         )
+        # A bridge restart or `just resume` keeps the Factorio save and ledger
+        # but clears the SDK session. Reassess once before executing old plan
+        # steps so live structures in the save can supersede stale progress.
+        self._exec_ticks_since_plan = self._planner_interval
         self._reflect_interval = int(agent.get("reflect_interval", 16))
         self._planner_model = agent.get("planner_model") or "sonnet"
         # When True, autonomy ticks only fire while a human is connected to the
@@ -1041,7 +1381,6 @@ class AgentThread:
         self.autonomy_requires_player = bool(
             agent.get("autonomy_requires_player", autonomy_requires_player)
         )
-        self._waiting_for_player_logged = False
         self.session_id = load_session(self.agent_name)
         self.inbox: queue.Queue = queue.Queue()
         self._thread = threading.Thread(
@@ -1075,8 +1414,20 @@ class AgentThread:
             lua = (
                 f'local c = remote.call("claude_interface", "get_character", {agent}) '
                 'if c and c.valid then '
+                'local names = {"burner-mining-drill","electric-mining-drill",'
+                '"stone-furnace","assembling-machine-1","transport-belt",'
+                '"burner-inserter","inserter","small-electric-pole",'
+                '"medium-electric-pole","offshore-pump","boiler",'
+                '"steam-engine","pipe","lab"} '
+                'local parts = {} '
+                'for _, name in ipairs(names) do '
+                'local count = #c.surface.find_entities_filtered{force=c.force, name=name} '
+                'if count > 0 then parts[#parts + 1] = name .. "=" .. count end '
+                'end '
+                'local summary = "" '
+                'if #parts > 0 then summary = "; player entities: " .. table.concat(parts, ", ") end '
                 f'{_RCON_PRINT}("Live state: " .. c.surface.name .. " @ " .. '
-                'string.format("%.1f,%.1f", c.position.x, c.position.y)) '
+                'string.format("%.1f,%.1f", c.position.x, c.position.y) .. summary) '
                 'end'
             )
             return self.rcon.execute(f"/silent-command {lua}").strip()
@@ -1095,7 +1446,6 @@ class AgentThread:
         events = load_events(self.agent_name, 5)
         memory = render_memory(events, load_reflection(self.agent_name))
         ledger_text = render_ledger(ledger)
-        skill_text = render_skills(load_library())
         mode = choose_autonomy_mode(
             ledger, self._exec_ticks_since_plan, self._planner_interval,
         )
@@ -1107,24 +1457,7 @@ class AgentThread:
             self._exec_ticks_since_plan = 0
         else:
             self._exec_ticks_since_plan += 1
-        # The available-skills list is injected every tick (compact); the full
-        # save-a-new-skill format example is shown only on the deliberative
-        # planner tick so cheap execution ticks stay lean.
-        parts = [memory, ledger_text, skill_text]
-        if mode == "plan":
-            parts.append(
-                "Prefer reusing an existing skill over re-deriving a build; when "
-                "you perfect a new reusable build, save it as a <skill> block.\n"
-                "<skill>\n"
-                "name: lay_smelting_line\n"
-                "params: ore_belt_pos, furnace_count\n"
-                "steps:\n"
-                "- place N stone furnaces in a column\n"
-                "- route the ore belt past them and add input burner-inserters\n"
-                "- add output burner-inserters to a plates belt\n"
-                "outcome: iron/copper plates on the output belt\n"
-                "</skill>"
-            )
+        parts = [memory, ledger_text]
         continuity_parts = [part for part in parts if part]
 
         message = build_autonomy_prompt(
@@ -1166,15 +1499,10 @@ class AgentThread:
             try:
                 return self.inbox.get(timeout=self.heartbeat_interval)
             except queue.Empty:
-                if self.autonomy_requires_player and not self._human_connected():
-                    if not self._waiting_for_player_logged:
-                        self.log.info(
-                            "{} idle - waiting for a player to join before acting",
-                            self.agent_name,
-                        )
-                        self._waiting_for_player_logged = True
+                if _get_usage_limit_cooldown(self.agent_name):
                     continue
-                self._waiting_for_player_logged = False
+                if self.autonomy_requires_player and not self._human_connected():
+                    continue
                 return self._autonomy_tick()
 
     def _run(self):
@@ -1215,6 +1543,21 @@ class AgentThread:
             self.log.info("{} -> {}: {}", player_name, self.agent_name, message)
         emit_chat(self.telemetry, "player", message, agent=self.telemetry_name)
 
+        cooldown_until = _get_usage_limit_cooldown(self.agent_name)
+        if cooldown_until:
+            if player_index > 0:
+                try:
+                    send_response(
+                        self.rcon,
+                        player_index,
+                        response_to or self.agent_name,
+                        _usage_limit_message(cooldown_until),
+                    )
+                    set_status(self.rcon, player_index, "[color=0.4,0.8,0.4]Ready[/color]")
+                except Exception as e:
+                    self.log.debug("rate-limit status reply failed: {}", e)
+            return
+
         # player_index=0 means injected message (supervisor/API), skip GUI updates
         if player_index > 0:
             try:
@@ -1235,7 +1578,7 @@ class AgentThread:
             self.rcon, player_index, self.telemetry,
             agent_name=self.agent_name, telemetry_name=self.telemetry_name,
             response_to=response_to, model=msg.get("model") or self.model,
-            max_turns=self.max_turns,
+            max_turns=self.max_turns, sdk_skills=self.sdk_skills,
         )
         if new_session:
             self.session_id = new_session
@@ -1247,7 +1590,12 @@ def main_multi(args, agent_profiles: list[dict]):
     log = logger.bind(agent="system")
     # Shared RCON (thread-safe)
     log.info("Connecting to Factorio RCON...")
-    rcon_raw = RCONClient(args.rcon_host, args.rcon_port, args.rcon_password)
+    rcon_raw = RCONClient(
+        args.rcon_host,
+        args.rcon_port,
+        args.rcon_password,
+        log=log,
+    )
     rcon = ThreadSafeRCON(rcon_raw)
     log.info("RCON connected")
 
@@ -1292,6 +1640,7 @@ def main_multi(args, agent_profiles: list[dict]):
 
     # MCP configs and agent threads
     mcp_bin = args.factorioctl_mcp or find_factorioctl_mcp()
+    sdk_skills = _resolve_sdk_skills(args.sdk_skills)
     agents: dict[str, AgentThread] = {}
     for agent in agent_profiles:
         mcp_config = None
@@ -1304,7 +1653,8 @@ def main_multi(args, agent_profiles: list[dict]):
                          heartbeat_interval=args.heartbeat_interval,
                          planner_interval=args.planner_interval,
                          autonomy_requires_player=args.autonomy_requires_player,
-                         max_turns=args.max_turns)
+                         max_turns=args.max_turns,
+                         sdk_skills=sdk_skills)
         agents[agent["name"]] = at
 
     # Resolve paths and start watcher
@@ -1319,6 +1669,7 @@ def main_multi(args, agent_profiles: list[dict]):
     log.info("Agents: {}", agent_names)
     log.info("RCON: {}:{}", args.rcon_host, args.rcon_port)
     log.info("Input: {}", input_file)
+    log.info("SDK skills: {}", sdk_skills if sdk_skills else "disabled")
     if mcp_bin:
         log.info("MCP server: {}", mcp_bin)
 
@@ -1404,6 +1755,14 @@ def main():
         default=None,
         help=f"Max tool-use turns per message (default: {DEFAULT_MAX_TURNS}; env BRIDGE_MAX_TURNS)",
     )
+    parser.add_argument(
+        "--sdk-skills",
+        default=None,
+        help=(
+            "Claude Code SDK skills to expose: comma list, 'all', or 'none' "
+            f"(default: {DEFAULT_SDK_SKILLS}; env BRIDGE_SDK_SKILLS)"
+        ),
+    )
     parser.add_argument("--poll-interval", type=float, default=0.5)
     parser.add_argument("--heartbeat-interval", type=float, default=6.0,
                         help="Autonomy: seconds idle before the agent self-prompts "
@@ -1471,6 +1830,9 @@ def main():
     max_turns = _resolve_max_turns(
         args.max_turns if args.max_turns is not None else agent.get("max_turns")
     )
+    sdk_skills = _resolve_sdk_skills(
+        args.sdk_skills if args.sdk_skills is not None else agent.get("sdk_skills")
+    )
     telemetry_name = agent.get("telemetry_name", agent_name)
     log = logger.bind(agent=telemetry_name)
 
@@ -1495,6 +1857,7 @@ def main():
         log.info("Session: (new)")
     if model:
         log.info("Model: {}", model)
+    log.info("SDK skills: {}", sdk_skills if sdk_skills else "disabled")
     if mcp_bin:
         log.info("MCP server: {}", mcp_bin)
     else:
@@ -1502,7 +1865,7 @@ def main():
 
     # RCON
     log.info("Connecting to Factorio RCON...")
-    rcon = RCONClient(args.rcon_host, args.rcon_port, args.rcon_password)
+    rcon = RCONClient(args.rcon_host, args.rcon_port, args.rcon_password, log=log)
     log.info("RCON connected")
     if check_mod_loaded(rcon):
         log.info("claude-interface mod detected")
@@ -1565,6 +1928,7 @@ def main():
                     rcon, player_index, telemetry,
                     agent_name=agent_name, telemetry_name=telemetry_name,
                     model=model, max_turns=max_turns,
+                    sdk_skills=sdk_skills,
                 )
                 if new_session:
                     session_id = new_session
