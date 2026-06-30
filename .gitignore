@@ -28,3 +28,6 @@ logs/
 .dolt/
 *.db
 .beads-credential-key
+
+# Misc 
+GOAL.md
